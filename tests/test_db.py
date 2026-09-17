@@ -201,3 +201,25 @@ def test_recent_emails_window_and_order_with_mixed_timezones(db):
         update={"received_at": datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)}))
     got = [e.message_id for e in db.recent_emails(days=7, now=now)]
     assert got == ["aware-newest", "naive-recent"]
+
+
+# ------------------------------------------------------------ assessments
+
+def test_assessment_round_trip_and_overwrite(db):
+    db.insert_email(make_email(mid="m1"))
+    db.upsert_assessment("m1", "CAUTION", ["link to a raw IP address"])
+    assert db.get_assessment("m1") == {"level": "CAUTION",
+                                       "evidence": ["link to a raw IP address"]}
+    db.upsert_assessment("m1", "THREAT", ["SPF, DMARC failed"])
+    assert db.get_assessment("m1")["level"] == "THREAT"
+    assert db.get_assessment("nope") is None
+
+
+def test_assessment_requires_a_known_email(db):
+    with pytest.raises(sqlite3.IntegrityError):
+        db.upsert_assessment("ghost", "NONE", [])
+
+
+def test_assessments_table_has_no_place_for_body_or_gist(db):
+    cols = {r["name"] for r in db.con.execute("PRAGMA table_info(assessments)")}
+    assert cols == {"message_id", "level", "evidence", "assessed_at"}

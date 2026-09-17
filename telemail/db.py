@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS transactions (
     used_at    TEXT
 );
 
+-- Feature C verdicts: level and evidence only. The body and the model's gist
+-- are never stored (D4).
+CREATE TABLE IF NOT EXISTS assessments (
+    message_id  TEXT PRIMARY KEY REFERENCES emails(message_id),
+    level       TEXT NOT NULL,
+    evidence    TEXT NOT NULL,
+    assessed_at TEXT NOT NULL
+);
+
 -- Keywords the user expects today (Feature B). Kept after the day ends so
 -- matching quality can be evaluated later; only today's rows are ever used.
 CREATE TABLE IF NOT EXISTS expectations (
@@ -374,6 +383,21 @@ class Database:
             if e is not None and _aware(e.received_at) >= cutoff:
                 found.append(e)
         return sorted(found, key=lambda e: _aware(e.received_at), reverse=True)
+
+    # ----------------------------------------------------------- assessments
+
+    def upsert_assessment(self, message_id: str, level: str, evidence: list[str]) -> None:
+        self.con.execute(
+            "INSERT INTO assessments VALUES (?,?,?,?) ON CONFLICT(message_id) DO UPDATE "
+            "SET level=excluded.level, evidence=excluded.evidence, "
+            "assessed_at=excluded.assessed_at",
+            (message_id, level, json.dumps(evidence), _now()))
+        self.con.commit()
+
+    def get_assessment(self, message_id: str) -> dict | None:
+        row = self.con.execute("SELECT level, evidence FROM assessments WHERE message_id = ?",
+                               (message_id,)).fetchone()
+        return {"level": row["level"], "evidence": json.loads(row["evidence"])} if row else None
 
     # ---------------------------------------------------------- transactions
 
