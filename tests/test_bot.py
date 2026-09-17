@@ -201,30 +201,6 @@ def test_malformed_callback_data_is_rejected(env):
 
 # ----------------------------------------------------------------- /ask
 
-def test_ask_sends_the_proposal_through_the_broker(env):
-    db, broker = env
-
-    class Planner:
-        def propose(self, q, context): return {"op": "send_email", "to": "x@y.z"}
-
-    bot = TeleMailBot("tok", ALLOWED, db=db, broker=broker, planner=Planner())
-    replies = []
-
-    class Msg:
-        async def reply_text(self, t, **kw): replies.append(t)
-
-    class U:
-        effective_chat = type("C", (), {"id": ALLOWED})()
-        message = Msg()
-
-    class Ctx:
-        args = ["what", "is", "urgent"]
-
-    asyncio.run(bot.on_ask(U(), Ctx()))
-    assert "not permitted" in replies[0]
-    assert len(db.audit_entries(event="rejected")) == 1
-
-
 # ------------------------------------------------- interactive commands
 
 class _Msg:

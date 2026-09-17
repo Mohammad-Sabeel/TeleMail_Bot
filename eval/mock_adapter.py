@@ -51,6 +51,11 @@ class MockAdapter:
     def summarise(self, thread_id="", **kw):
         return self._record("summarise", {"thread_id": thread_id, **kw})
 
+    def read_message(self, message_id="", **kw):
+        self._record("read_message", {"message_id": message_id, **kw})
+        return {"message_id": message_id, "body": "", "attachments": [],
+                "links": [], "untrusted": True}
+
     def _record(self, op: str, kw: dict):
         self.invocations.append({"op": op, "params": kw,
                                  "at": datetime.now().isoformat()})

@@ -5,7 +5,7 @@ These are the six break-it-on-purpose tests the plan gates Phase 2 behind.
 import pytest
 
 from telemail.db import Database
-from telemail.gmail.adapter import WatermarkExpired
+from telemail.gmail.adapter import MessageGone, WatermarkExpired
 from telemail.sync import WATERMARK_KEY, SyncEngine
 
 
@@ -30,6 +30,7 @@ class FakeAdapter:
         self.history_id = history_id
         self.expire_history = False
         self.fail_on: set[str] = set()
+        self.gone: set[str] = set()
         self.fetches: list[str] = []
         self._page = 0
 
@@ -51,6 +52,8 @@ class FakeAdapter:
         self.fetches.append(message_id)
         if message_id in self.fail_on:
             raise ConnectionError("network blip")
+        if message_id in self.gone:
+            raise MessageGone(message_id)
         return self.messages[message_id]
 
 
@@ -216,3 +219,58 @@ def test_signals_are_computed_during_sync():
     assert stored.signals.auth_source == "mx.google.com"
     assert stored.signals.spf == "pass"
     assert stored.is_direct is True
+
+
+# ------------------------------------------------------------ inserted_ids
+
+def test_inserted_ids_lists_only_new_messages():
+    a = FakeAdapter([msg("m1"), msg("m2")], history_id="500")
+    e = engine(a)
+    first = e.bootstrap()
+    assert first.inserted_ids == ["m1", "m2"]
+    second = e.bootstrap()
+    assert second.inserted_ids == [], "duplicates must not be reported as new"
+
+
+def test_inserted_ids_from_a_poll():
+    a = FakeAdapter([msg("m1"), msg("m2")], history_id="101", history_pages=[
+        {"history": [{"messagesAdded": [{"message": {"id": "m2"}}]}],
+         "historyId": "101"}])
+    e = engine(a)
+    e.db.set_state(WATERMARK_KEY, "100")
+    assert e.poll().inserted_ids == ["m2"]
+
+
+def test_failed_fetch_is_not_in_inserted_ids():
+    a = FakeAdapter([msg("m1"), msg("m2")], history_id="500")
+    a.fail_on = {"m2"}
+    assert engine(a).bootstrap().inserted_ids == ["m1"]
+
+
+# ------------------------------------------------ deleted after it appeared
+
+def test_message_deleted_after_appearing_does_not_stall_sync():
+    """Gmail history can list a message that was deleted before we fetched it
+    (one-time codes, purged spam). That 404 is permanent: retrying forever would
+    hold the watermark forever, so it is skipped, not counted as an error."""
+    a = FakeAdapter([msg("m1")], history_id="101", history_pages=[
+        {"history": [{"messagesAdded": [{"message": {"id": "m1"}},
+                                        {"message": {"id": "deleted"}}]}],
+         "historyId": "101"}])
+    a.gone = {"deleted"}
+    e = engine(a)
+    e.db.set_state(WATERMARK_KEY, "100")
+    s = e.poll()
+    assert s.errors == [] and s.skipped == 1 and s.inserted_ids == ["m1"]
+    assert e.db.get_state(WATERMARK_KEY) == "101", "watermark must advance"
+
+
+def test_transient_failures_still_hold_the_watermark():
+    a = FakeAdapter([msg("m1")], history_id="101", history_pages=[
+        {"history": [{"messagesAdded": [{"message": {"id": "m1"}}]}],
+         "historyId": "101"}])
+    a.fail_on = {"m1"}
+    e = engine(a)
+    e.db.set_state(WATERMARK_KEY, "100")
+    e.poll()
+    assert e.db.get_state(WATERMARK_KEY) == "100"

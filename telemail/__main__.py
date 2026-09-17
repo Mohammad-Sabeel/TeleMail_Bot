@@ -16,6 +16,7 @@ import argparse
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 
 from telemail.bot import TeleMailBot
 from telemail.broker.broker import Broker
@@ -55,15 +56,19 @@ def build_app(db_path: str | None = None) -> App:
     broker = Broker(db, adapter, write_service=None)
     planner = OpenRouterPlanner(s.openrouter_api_key, s.model_name)
 
-    return App(db=db, adapter=adapter,
-               sync=SyncEngine(db, adapter, own_address=own),
-               broker=broker, planner=planner,
-               policy=AlertPolicy(),
-               prefilter_cfg=PrefilterConfig(),
-               own_address=own,
-               bot=TeleMailBot(s.telegram_bot_token, s.telegram_allowed_chat_id,
-                               db=db, broker=broker, planner=planner,
-                               adapter=adapter))
+    app = App(db=db, adapter=adapter,
+              sync=SyncEngine(db, adapter, own_address=own),
+              broker=broker, planner=planner,
+              policy=AlertPolicy(),
+              prefilter_cfg=PrefilterConfig(),
+              own_address=own,
+              bot=TeleMailBot(s.telegram_bot_token, s.telegram_allowed_chat_id,
+                              db=db, broker=broker, planner=planner,
+                              adapter=adapter))
+    app.bot.sync_fn = app.sync.poll
+    app.bot.triage_fn = lambda: triage_all(app)
+    app.bot.reports_dir = Path("data/reports")
+    return app
 
 
 # ------------------------------------------------------------------ triage
@@ -94,6 +99,17 @@ def triage_pending(app: App, limit: int = 40) -> list[TriageResult]:
     for verdict in decided:
         app.db.upsert_triage(verdict)
     return decided
+
+
+def triage_all(app: App, limit: int = 40, max_rounds: int = 50) -> int:
+    """Triage until the queue is empty or a round decides nothing (model down).
+    Returns how many emails are still untriaged."""
+    # ponytail: stops at the first empty round; if >limit deferred emails fail
+    # together, later emails wait for the next /sync. Page past failures if seen.
+    for _ in range(max_rounds):
+        if not triage_pending(app, limit):
+            break
+    return len(app.db.untriaged(10_000))
 
 
 def alerts_sent_today(app: App) -> int:
@@ -167,55 +183,11 @@ def cmd_status(app: App) -> None:
     print(f"alerts today  {alerts_sent_today(app)}")
 
 
-async def cycle(app: App, application) -> int:
-    """One pass: fetch, judge, announce. Everything that can fail is caught so
-    a bad cycle never takes the bot down with it."""
-    try:
-        stats = app.sync.poll()
-        if stats.inserted:
-            log.info("ingested %d new (%d duplicate)", stats.inserted,
-                     stats.duplicates)
-    except Exception:
-        log.exception("sync failed this cycle")
-
-    try:
-        triage_pending(app)
-    except Exception:
-        log.exception("triage failed this cycle")
-
-    sent = 0
-    for email, verdict in due_alerts(app):
-        try:
-            await app.bot.send_alert(application, email, verdict)
-            sent += 1
-        except Exception:
-            # Not marked as alerted, so it is retried next cycle rather than lost.
-            log.exception("could not send alert for %s", email.message_id)
-    return sent
-
-
-def cmd_bot(app: App, interval: int) -> None:      # pragma: no cover
-    """Telegram long polling, with the mail cycle on its job queue.
-
-    One process and one event loop: the bot owns the loop and the mail cycle is
-    a repeating job inside it. No threads, no second scheduler, and nothing to
-    reason about regarding shared state.
-    """
-    application = app.bot.build_app()
-
-    async def job(_context):
-        sent = await cycle(app, application)
-        if sent:
-            log.info("sent %d alert(s)", sent)
-
-    if application.job_queue is None:
-        raise SystemExit("job queue unavailable — install "
-                         "python-telegram-bot[job-queue]")
-    application.job_queue.run_repeating(job, interval=interval, first=5)
-
-    log.info("bot running; mail cycle every %ss; chat %s",
-             interval, app.bot.allowed_chat_id)
-    application.run_polling()
+def cmd_bot(app: App) -> None:                     # pragma: no cover
+    """Telegram long polling. Mail is fetched only when you send /sync."""
+    log.info("bot running; mail syncs only on /sync; chat %s",
+             app.bot.allowed_chat_id)
+    app.bot.build_app().run_polling()
 
 
 def cmd_run(app: App, interval: int) -> None:      # pragma: no cover
@@ -260,7 +232,7 @@ def main() -> None:
     {"sync": cmd_sync,
      "triage": cmd_triage,
      "status": cmd_status,
-     "bot": lambda a: cmd_bot(a, interval),
+     "bot": cmd_bot,
      "run": lambda a: cmd_run(a, interval)}[args.command](app)
 
 

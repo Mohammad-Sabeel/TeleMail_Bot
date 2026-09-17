@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -100,6 +100,25 @@ CREATE TABLE IF NOT EXISTS transactions (
     used_at    TEXT
 );
 
+-- Feature C verdicts: level and evidence only. The body and the model's gist
+-- are never stored (D4).
+CREATE TABLE IF NOT EXISTS assessments (
+    message_id  TEXT PRIMARY KEY REFERENCES emails(message_id),
+    level       TEXT NOT NULL,
+    evidence    TEXT NOT NULL,
+    assessed_at TEXT NOT NULL
+);
+
+-- Keywords the user expects today (Feature B). Kept after the day ends so
+-- matching quality can be evaluated later; only today's rows are ever used.
+CREATE TABLE IF NOT EXISTS expectations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    day        TEXT NOT NULL,
+    keyword    TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_expectations_day ON expectations(day);
+
 CREATE TABLE IF NOT EXISTS state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -111,12 +130,21 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat()
 
 
+def _aware(dt: datetime) -> datetime:
+    """Naive timestamps are local time; make them comparable with aware ones."""
+    return dt if dt.tzinfo else dt.astimezone()
+
+
 class Database:
     def __init__(self, path: str | Path):
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.con = sqlite3.connect(self.path)
+        # The bot runs sync and triage via asyncio.to_thread. SQLite is built
+        # serialized (sqlite3.threadsafety == 3), so one connection may be
+        # shared across threads; /sync's lock keeps syncs from overlapping.
+        # ponytail: shared connection; add a write lock if concurrent writers appear.
+        self.con = sqlite3.connect(self.path, check_same_thread=False)
         self.con.row_factory = sqlite3.Row
         self.con.execute("PRAGMA foreign_keys = ON")
         self.con.executescript(SCHEMA)
@@ -320,6 +348,56 @@ class Database:
             "SELECT l.message_id, e.thread_id, l.important, l.rubric_version "
             "FROM labels l JOIN emails e USING (message_id) "
             "ORDER BY e.received_at")]
+
+
+    # ---------------------------------------------------------- expectations
+
+    def add_expectations(self, day: str, keywords: list[str]) -> None:
+        self.con.executemany(
+            "INSERT INTO expectations (day, keyword, created_at) VALUES (?,?,?)",
+            [(day, k, _now()) for k in keywords])
+        self.con.commit()
+
+    def expectations_for(self, day: str) -> list[str]:
+        seen, out = set(), []
+        for r in self.con.execute(
+                "SELECT keyword FROM expectations WHERE day = ? ORDER BY id", (day,)):
+            if r["keyword"].lower() not in seen:
+                seen.add(r["keyword"].lower())
+                out.append(r["keyword"])
+        return out
+
+    def clear_expectations(self, day: str) -> int:
+        cur = self.con.execute("DELETE FROM expectations WHERE day = ?", (day,))
+        self.con.commit()
+        return cur.rowcount
+
+    def recent_emails(self, days: int, now: datetime) -> list[Email]:
+        """Emails received in the last `days` days, newest first."""
+        cutoff = _aware(now) - timedelta(days=days)
+        # ponytail: loads every email to compare mixed naive/aware timestamps;
+        # move the filter into SQL once received_at is stored normalised.
+        found = []
+        for r in self.con.execute("SELECT message_id FROM emails"):
+            e = self.get_email(r["message_id"])
+            if e is not None and _aware(e.received_at) >= cutoff:
+                found.append(e)
+        return sorted(found, key=lambda e: _aware(e.received_at), reverse=True)
+
+    # ----------------------------------------------------------- assessments
+
+    def upsert_assessment(self, message_id: str, level: str, evidence: list[str]) -> None:
+        self.con.execute(
+            "INSERT INTO assessments VALUES (?,?,?,?) ON CONFLICT(message_id) DO UPDATE "
+            "SET level=excluded.level, evidence=excluded.evidence, "
+            "assessed_at=excluded.assessed_at",
+            (message_id, level, json.dumps(evidence), _now()))
+        self.con.commit()
+
+    def get_assessment(self, message_id: str) -> dict | None:
+        row = self.con.execute("SELECT level, evidence FROM assessments WHERE message_id = ?",
+                               (message_id,)).fetchone()
+        return {"level": row["level"], "evidence": json.loads(row["evidence"])} if row else None
 
     # ---------------------------------------------------------- transactions
 

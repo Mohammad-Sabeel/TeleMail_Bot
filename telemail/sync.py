@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from telemail.gmail.adapter import WatermarkExpired
+from telemail.gmail.adapter import MessageGone, WatermarkExpired
 from telemail.gmail.normalise import from_gmail_payload
 
 log = logging.getLogger(__name__)
@@ -37,6 +37,8 @@ class SyncStats:
     fetched: int = 0
     inserted: int = 0
     duplicates: int = 0
+    skipped: int = 0                 # deleted before we could fetch them
+    inserted_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     resynced: bool = False
     watermark: str | None = None
@@ -60,6 +62,9 @@ class SyncEngine:
                 payload = self.adapter.fetch_metadata(mid)
                 email = from_gmail_payload(payload, own_address=self.own_address,
                                            db=self.db)
+            except MessageGone:
+                stats.skipped += 1
+                continue
             except Exception as e:
                 stats.errors.append(f"{mid}: {type(e).__name__}")
                 log.warning("failed to ingest %s: %s", mid, e)
@@ -68,6 +73,7 @@ class SyncEngine:
             stats.fetched += 1
             if self.db.insert_email(email):
                 stats.inserted += 1
+                stats.inserted_ids.append(email.message_id)
             else:
                 stats.duplicates += 1
 

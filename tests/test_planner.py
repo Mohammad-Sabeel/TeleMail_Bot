@@ -273,3 +273,26 @@ def test_prompt_lists_every_allowed_value_from_the_schema():
     for field in ("category", "proposed_action"):
         for value in get_args(TriageResult.model_fields[field].annotation):
             assert value in SYSTEM_PROMPT, f"{field}={value} missing from prompt"
+
+
+# ------------------------------------------------------------ ask_json
+
+def test_ask_json_returns_parsed_object():
+    assert StubPlanner(['{"a": 1}']).ask_json("s", "u") == {"a": 1}
+
+
+def test_ask_json_reports_unparseable_and_non_objects():
+    assert "error" in StubPlanner(["not json"]).ask_json("s", "u")
+    assert "error" in StubPlanner(["[1, 2]"]).ask_json("s", "u")
+
+
+def test_ask_json_reports_call_failure():
+    class Boom(_BasePlanner):
+        def _complete(self, s, u): raise ConnectionError("down")
+    assert Boom().ask_json("s", "u")["error"].startswith("model call failed")
+
+
+def test_ask_json_refuses_when_unconfigured():
+    from telemail.triage.planner import OpenRouterPlanner
+    assert OpenRouterPlanner(api_key="", model="").ask_json("s", "u") == \
+        {"error": "planner not configured"}

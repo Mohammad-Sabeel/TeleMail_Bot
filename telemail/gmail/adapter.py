@@ -12,6 +12,8 @@ it. Bodies are fetched here, returned, and never persisted (D4).
 from __future__ import annotations
 
 import base64
+import re
+from html.parser import HTMLParser
 from typing import Any
 
 class WatermarkExpired(Exception):
@@ -20,6 +22,15 @@ class WatermarkExpired(Exception):
     Translated here so sync.py never has to import the Google SDK — the
     boundary test asserts only this module and auth.py may.
     """
+
+
+class MessageGone(Exception):
+    """404 on a message id: it was deleted after appearing in history (one-time
+    codes, purged spam). Permanent, so sync skips it instead of retrying."""
+
+
+def _http_status(e: Exception) -> int | None:
+    return getattr(getattr(e, "resp", None), "status", None)
 
 
 MAX_BODY_CHARS = 8000        # cost bound and exposure bound, in that order
@@ -65,6 +76,68 @@ def extract_body(payload: dict) -> str:
     walk(payload)
     text = (plain[0] if plain else (html[0] if html else ""))
     return text[:MAX_BODY_CHARS]
+
+
+MAX_LINKS = 50
+_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
+
+
+def _parts(payload: dict):
+    yield payload
+    for child in payload.get("parts", []) or []:
+        yield from _parts(child)
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links: list[dict] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self._href = dict(attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._href is not None:
+            self.links.append({"text": " ".join("".join(self._text).split()),
+                               "href": self._href})
+            self._href = None
+
+
+def extract_links(payload: dict) -> list[dict]:
+    """Anchors from HTML parts, bare URLs from plain parts. Attachments skipped."""
+    links: list[dict] = []
+    for part in _parts(payload):
+        if part.get("filename"):
+            continue
+        data = _decode(part.get("body", {}).get("data"))
+        if part.get("mimeType") == "text/html":
+            parser = _LinkParser()
+            try:
+                parser.feed(data)
+            except Exception:
+                pass
+            links += [link for link in parser.links if link["href"]]
+        elif part.get("mimeType") == "text/plain":
+            links += [{"text": url, "href": url} for url in _URL_RE.findall(data)]
+    seen, out = set(), []
+    for link in links:
+        key = (link["text"], link["href"])
+        if key not in seen:
+            seen.add(key)
+            out.append(link)
+    return out[:MAX_LINKS]
+
+
+def attachment_names(payload: dict) -> list[str]:
+    return [part["filename"] for part in _parts(payload) if part.get("filename")]
 
 
 class GmailReadAdapter:
@@ -133,11 +206,31 @@ class GmailReadAdapter:
         return {"thread_id": thread_id, "messages": messages,
                 "untrusted": True}          # consumers must delimit this content
 
+    def read_message(self, message_id: str) -> dict:
+        """One message in full: body, attachment names, links. Attacker-authored,
+        returned for the report and never stored (D4)."""
+        try:
+            msg = self._service.users().messages().get(
+                userId=self._user, id=message_id, format="full").execute()
+        except Exception as e:
+            if _http_status(e) == 404:
+                raise MessageGone(message_id) from e
+            raise
+        payload = msg.get("payload", {})
+        return {"message_id": message_id, "body": extract_body(payload),
+                "attachments": attachment_names(payload),
+                "links": extract_links(payload), "untrusted": True}
+
     def fetch_metadata(self, message_id: str) -> dict:
         """Raw API shape for the sync path; normalise.from_gmail_payload consumes it."""
-        return self._service.users().messages().get(
-            userId=self._user, id=message_id, format="metadata",
-            metadataHeaders=METADATA_HEADERS).execute()
+        try:
+            return self._service.users().messages().get(
+                userId=self._user, id=message_id, format="metadata",
+                metadataHeaders=METADATA_HEADERS).execute()
+        except Exception as e:
+            if _http_status(e) == 404:
+                raise MessageGone(message_id) from e
+            raise
 
     def history(self, start_history_id: str, max_results: int = 500,
                 page_token: str | None = None) -> dict:
@@ -148,8 +241,7 @@ class GmailReadAdapter:
                 historyTypes=["messageAdded"], maxResults=max_results,
                 pageToken=page_token).execute()
         except Exception as e:
-            status = getattr(getattr(e, "resp", None), "status", None)
-            if status == 404:
+            if _http_status(e) == 404:
                 raise WatermarkExpired(start_history_id) from e
             raise
 

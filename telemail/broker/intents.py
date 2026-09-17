@@ -42,7 +42,13 @@ class SummariseIntent(_Strict):
     thread_id: str = Field(pattern=THREAD_ID)
 
 
-Intent = Annotated[Union[SearchIntent, GetThreadIntent, SummariseIntent],
+class ReadMessageIntent(_Strict):
+    op: Literal["read_message"]
+    message_id: str = Field(pattern=THREAD_ID)
+
+
+Intent = Annotated[Union[SearchIntent, GetThreadIntent, SummariseIntent,
+                         ReadMessageIntent],
                    Field(discriminator="op")]
 
 

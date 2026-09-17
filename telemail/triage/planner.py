@@ -242,6 +242,21 @@ class _BasePlanner:
         usage, self._usage = getattr(self, "_usage", []), []
         return usage
 
+    def ask_json(self, system: str, user: str) -> dict:
+        """One model call returning a parsed JSON object, or {"error": ...}.
+        Never raises. Callers validate the object with their own strict schema."""
+        if not getattr(self, "configured", True):
+            return {"error": "planner not configured"}
+        try:
+            raw = self._complete(system, user)
+        except Exception as e:
+            return {"error": f"model call failed: {type(e).__name__}"}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"error": "unparseable reply"}
+        return parsed if isinstance(parsed, dict) else {"error": "reply is not an object"}
+
     def triage(self, emails: list[Email]) -> list[TriageResult]:
         if not getattr(self, "configured", True):
             raise PlannerNotConfigured("set OPENROUTER_API_KEY and MODEL_NAME in .env")
