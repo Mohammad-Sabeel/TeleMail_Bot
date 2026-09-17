@@ -37,6 +37,7 @@ class SyncStats:
     fetched: int = 0
     inserted: int = 0
     duplicates: int = 0
+    inserted_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     resynced: bool = False
     watermark: str | None = None
@@ -68,6 +69,7 @@ class SyncEngine:
             stats.fetched += 1
             if self.db.insert_email(email):
                 stats.inserted += 1
+                stats.inserted_ids.append(email.message_id)
             else:
                 stats.duplicates += 1
 

@@ -216,3 +216,29 @@ def test_signals_are_computed_during_sync():
     assert stored.signals.auth_source == "mx.google.com"
     assert stored.signals.spf == "pass"
     assert stored.is_direct is True
+
+
+# ------------------------------------------------------------ inserted_ids
+
+def test_inserted_ids_lists_only_new_messages():
+    a = FakeAdapter([msg("m1"), msg("m2")], history_id="500")
+    e = engine(a)
+    first = e.bootstrap()
+    assert first.inserted_ids == ["m1", "m2"]
+    second = e.bootstrap()
+    assert second.inserted_ids == [], "duplicates must not be reported as new"
+
+
+def test_inserted_ids_from_a_poll():
+    a = FakeAdapter([msg("m1"), msg("m2")], history_id="101", history_pages=[
+        {"history": [{"messagesAdded": [{"message": {"id": "m2"}}]}],
+         "historyId": "101"}])
+    e = engine(a)
+    e.db.set_state(WATERMARK_KEY, "100")
+    assert e.poll().inserted_ids == ["m2"]
+
+
+def test_failed_fetch_is_not_in_inserted_ids():
+    a = FakeAdapter([msg("m1"), msg("m2")], history_id="500")
+    a.fail_on = {"m2"}
+    assert engine(a).bootstrap().inserted_ids == ["m1"]
