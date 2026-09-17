@@ -23,8 +23,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import date, datetime
 
 from telemail.models import Email, TriageResult
+from telemail.triage.expect import match_keyword, parse_keywords
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +71,7 @@ def format_alert(email: Email, triage: TriageResult) -> str:
 HELP = """*TeleMail*
 
 /sync — fetch new mail, triage it, and summarise it
+/expect `[keywords | clear]` — emails you expect today
 
 Works without a model:
 /recent `[n]` — latest messages
@@ -81,6 +84,9 @@ Needs `OPENROUTER_API_KEY` and `MODEL_NAME`:
 /ask `<question>` — ask about your inbox in plain English
 
 Any other message is treated as /ask\\."""
+
+ASK_EXPECTED = ("Which emails are you expecting today? Send keywords, comma- or "
+                "line-separated — e.g. fee receipt, visa letter.")
 
 
 def format_email_line(email, triage=None) -> str:
@@ -315,6 +321,10 @@ class TeleMailBot:
         self.sync_fn = sync_fn
         self.triage_fn = triage_fn
         self._sync_lock = asyncio.Lock()
+        # Overridable clocks, so tests control what "today" is.
+        self.today = lambda: date.today().isoformat()
+        self.now = lambda: datetime.now().astimezone()
+        self._awaiting_keywords: str | None = None
 
     # ------------------------------------------------------------ guards
 
@@ -354,6 +364,10 @@ class TeleMailBot:
         await query.answer()
 
         data = str(query.data or "")
+        if data == "expect:skip":
+            self._awaiting_keywords = None
+            await query.edit_message_text("Skipped — use /expect any time.")
+            return
         if data.startswith("open:"):
             # Read-only: shows stored metadata; the summary message is left intact.
             email = self.db.get_email(data[len("open:"):])
@@ -472,13 +486,65 @@ class TeleMailBot:
             format_search_results(result.data or []), parse_mode="MarkdownV2")
 
     async def on_text(self, update, context) -> None:
-        """Anything that is not a command is a question."""
+        """The reply right after the daily question is keywords; anything else
+        is a question."""
         if not self._guard(update):
+            return
+        if self._awaiting_keywords == self.today():
+            self._awaiting_keywords = None
+            await self._add_expectations(update, update.message.text or "")
             return
 
         class _Ctx:
             args = (update.message.text or "").split()
         await self.on_ask(update, _Ctx())
+
+    def _expected_lines(self, keywords: list[str]) -> list[ExpectedLine]:
+        """Blocking (TF-IDF and a model call per keyword): run via to_thread."""
+        emails = self.db.recent_emails(days=7, now=self.now())
+        lines = []
+        for keyword in keywords:
+            m = match_keyword(self.planner, keyword, emails)
+            lines.append(ExpectedLine(keyword, [
+                (e, self.db.get_triage(e.message_id), score)
+                for e, score, _ in m.matches]))
+        return lines
+
+    async def _reply_expected(self, update, keywords: list[str]) -> None:
+        lines = await asyncio.to_thread(self._expected_lines, keywords)
+        summary = SyncSummary(new=0, important=0, suspicious=[], top=[], expected=lines)
+        await update.message.reply_text(format_expected_reply(lines),
+                                        parse_mode="MarkdownV2",
+                                        reply_markup=_keyboard(open_buttons(summary)))
+
+    async def _add_expectations(self, update, text: str) -> None:
+        keywords = parse_keywords(text)
+        if not keywords:
+            await update.message.reply_text(
+                "No keywords found. Try: fee receipt, visa letter")
+            return
+        self.db.add_expectations(self.today(), keywords)
+        await self._reply_expected(update, keywords)
+
+    async def on_expect(self, update, context) -> None:
+        if not self._guard(update):
+            return
+        args = list(getattr(context, "args", None) or [])
+        today = self.today()
+        if args == ["clear"]:
+            n = self.db.clear_expectations(today)
+            self._awaiting_keywords = None
+            await update.message.reply_text(f"Cleared {n} expectation(s) for today.")
+            return
+        if not args:
+            keywords = self.db.expectations_for(today)
+            if not keywords:
+                await update.message.reply_text(
+                    "Nothing expected today. Add some: /expect fee receipt, visa letter")
+                return
+            await self._reply_expected(update, keywords)
+            return
+        await self._add_expectations(update, " ".join(args))
 
     async def on_sync(self, update, _context) -> None:
         """Fetch, triage and summarise — only when asked. Blocking Gmail and
@@ -521,10 +587,19 @@ class TeleMailBot:
 
             items = [(self.db.get_email(i), self.db.get_triage(i))
                      for i in stats.inserted_ids]
-            summary = build_sync_summary(items)
+            keywords = self.db.expectations_for(self.today())
+            expected = (await asyncio.to_thread(self._expected_lines, keywords)
+                        if keywords else [])
+            summary = build_sync_summary(items, expected=expected)
             await progress.edit_text(format_sync_summary(summary, notes),
                                      parse_mode="MarkdownV2",
                                      reply_markup=_keyboard(open_buttons(summary)))
+
+            if self.db.get_state("expect_asked_on") != self.today():
+                self.db.set_state("expect_asked_on", self.today())
+                self._awaiting_keywords = self.today()
+                await update.message.reply_text(
+                    ASK_EXPECTED, reply_markup=_keyboard([("Skip", "expect:skip")]))
 
     async def on_status(self, update, _context) -> None:
         if not self._guard(update):
@@ -543,7 +618,7 @@ class TeleMailBot:
                                   CommandHandler)
         from telegram.ext import MessageHandler, filters
         app = ApplicationBuilder().token(self.token).build()
-        for name, handler in (("sync", self.on_sync),
+        for name, handler in (("sync", self.on_sync), ("expect", self.on_expect),
                               ("start", self.on_start), ("help", self.on_start),
                               ("recent", self.on_recent),
                               ("urgent", self.on_urgent),
