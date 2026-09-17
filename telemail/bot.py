@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -29,6 +30,8 @@ from pathlib import Path
 from telemail.models import Email, TriageResult
 from telemail.report import ReportEntry, build_report, caption, render_pdf
 from telemail.triage.assess import assess_email
+from telemail.triage.converse import (answer_from_bodies, answer_from_snippets,
+                                      interpret, retrieve)
 from telemail.triage.expect import match_keyword, parse_keywords
 
 log = logging.getLogger(__name__)
@@ -90,6 +93,11 @@ Any other message is treated as /ask\\."""
 
 ASK_EXPECTED = ("Which emails are you expecting today? Send keywords, comma- or "
                 "line-separated — e.g. fee receipt, visa letter.")
+NEEDS_MODEL = ("/ask needs a model. Set OPENROUTER_API_KEY and MODEL_NAME in .env "
+               "and restart.\n\nWorking now without one: /recent /urgent "
+               "/suspicious /search /status")
+NO_ANSWER = ("I couldn't get a usable answer from the model right now. "
+             "Slash commands still work.")
 
 
 def format_email_line(email, triage=None) -> str:
@@ -267,6 +275,26 @@ def format_email_details(email: Email, triage: TriageResult | None,
     return "\n".join(lines)
 
 
+def format_answer(answer: str,
+                  sources: list[tuple[Email, TriageResult | None, str | None]]) -> str:
+    """Warnings first, computed by code from the cited emails; then the model's
+    answer; then the sources, numbered to match the [Open] buttons."""
+    lines = []
+    flagged = [(e, why) for e, t, level in sources if (why := warning_reason(e, t, level))]
+    if flagged:
+        lines.append("⚠️ *Check before trusting this answer:*")
+        lines += [f"• {escape_md(escape_trim(e.subject, 50))} — {escape_md(why)}"
+                  for e, why in flagged]
+        lines.append("")
+    lines.append(escape_md(answer))
+    if sources:
+        lines += ["", "*Sources*"]
+        lines += [f"*{i}\\.* {escape_md(escape_trim(e.subject, 55))} — "
+                  f"{escape_md(escape_trim(e.sender_name or e.sender_email, 30))}"
+                  for i, (e, _, _) in enumerate(sources, 1)]
+    return "\n".join(lines)
+
+
 def _keyboard(buttons: list[tuple[str, str]]):
     """Inline keyboard, three buttons per row. None when there is nothing to open."""
     if not buttons:
@@ -339,6 +367,9 @@ class TeleMailBot:
         # Set by the composition root; None disables the reading/report stage
         # (bots built without it, e.g. in tests, never read mail).
         self.reports_dir: Path | None = None
+        # Conversation memory: the user's messages and the bot's answers only —
+        # never retrieved email text, so an email cannot steer later turns.
+        self.memory: deque[tuple[str, str]] = deque(maxlen=10)
 
     # ------------------------------------------------------------ guards
 
@@ -402,34 +433,72 @@ class TeleMailBot:
         await query.edit_message_text(
             "✅ Done" if result.ok else f"❌ Rejected: {result.reason}")
 
+    def _planner_ready(self) -> bool:
+        return self.planner is not None and getattr(
+            self.planner, "configured", bool(getattr(self.planner, "api_key", "x")))
+
+    def _answer(self, question: str) -> tuple[str, list[Email], bool]:
+        """Blocking (1–2 model calls, up to 3 Gmail reads): run via to_thread.
+        Returns (answer, cited emails, whether the model answered)."""
+        # ponytail: loads the whole mailbox per question; index it if it grows large.
+        emails = self.db.recent_emails(days=36_500, now=self.now())
+        candidates = retrieve(question, emails)
+        history = list(self.memory)
+        first = answer_from_snippets(self.planner, question, history, candidates)
+        if first is None:
+            return NO_ANSWER, [], False
+        answer, cited = first.answer, first.cited_ids
+
+        if first.need_full_body and first.message_ids:
+            reads = []
+            for n in first.message_ids:
+                email = candidates[n - 1]
+                try:
+                    result = self.broker.execute(
+                        {"op": "read_message", "message_id": email.message_id},
+                        actor="planner")
+                except Exception:
+                    log.exception("could not read %s", email.message_id)
+                    continue
+                if result.ok:
+                    reads.append((n, email, result.data.get("body", "")))
+            second = answer_from_bodies(self.planner, question, history, reads)
+            if second is not None:
+                answer, cited = second.answer, second.cited_ids
+        return answer, [candidates[n - 1] for n in cited], True
+
+    async def _handle_question(self, update, question: str) -> None:
+        if not self._planner_ready():
+            await update.message.reply_text(NEEDS_MODEL)
+            return
+        answer, cited, answered = await asyncio.to_thread(self._answer, question)
+        sources = []
+        for e in cited:
+            a = self.db.get_assessment(e.message_id)
+            sources.append((e, self.db.get_triage(e.message_id), a["level"] if a else None))
+        if answered:
+            self.memory.append((question, answer))
+        buttons = open_buttons(SyncSummary(new=0, important=0, suspicious=[],
+                                           top=[(e, t) for e, t, _ in sources]))
+        await update.message.reply_text(format_answer(answer, sources),
+                                        parse_mode="MarkdownV2",
+                                        reply_markup=_keyboard(buttons))
+
     async def on_ask(self, update, context) -> None:
+        """Straight to the answer pipeline; no intent routing."""
         if not self._guard(update):
             return
-        question = " ".join(context.args) if getattr(context, "args", None) else ""
+        question = " ".join(getattr(context, "args", None) or [])
         if not question:
             await update.message.reply_text("Usage: /ask <question>")
             return
-        ready = self.planner is not None and getattr(
-            self.planner, "configured", bool(getattr(self.planner, "api_key", "x")))
-        if not ready:
-            await update.message.reply_text(
-                "/ask needs a model. Set OPENROUTER_API_KEY and MODEL_NAME in "
-                ".env and restart.\n\nWorking now without one: /recent /urgent "
-                "/suspicious /search /status")
-            return
+        await self._handle_question(update, question)
 
-        # The model proposes; the broker decides. The raw dict is deliberately
-        # unvalidated here — validation belongs on the other side of the gate.
-        proposal = self.planner.propose(question, context=[])
-        result = self.broker.execute(proposal, actor="planner")
-
-        if not result.ok:
-            await update.message.reply_text(
-                f"That request was not permitted: {result.reason}")
+    async def on_forget(self, update, _context) -> None:
+        if not self._guard(update):
             return
-        await update.message.reply_text(
-            format_search_results(result.data if isinstance(result.data, list) else []),
-            parse_mode="MarkdownV2")
+        self.memory.clear()
+        await update.message.reply_text("Conversation forgotten.")
 
     async def on_start(self, update, _context) -> None:
         if not self._guard(update):
@@ -510,9 +579,7 @@ class TeleMailBot:
             await self._add_expectations(update, update.message.text or "")
             return
 
-        class _Ctx:
-            args = (update.message.text or "").split()
-        await self.on_ask(update, _Ctx())
+        await self._handle_question(update, update.message.text or "")
 
     def _expected_lines(self, keywords: list[str]) -> list[ExpectedLine]:
         """Blocking (TF-IDF and a model call per keyword): run via to_thread."""
@@ -695,7 +762,7 @@ class TeleMailBot:
                               ("urgent", self.on_urgent),
                               ("suspicious", self.on_suspicious),
                               ("search", self.on_search),
-                              ("ask", self.on_ask),
+                              ("ask", self.on_ask), ("forget", self.on_forget),
                               ("status", self.on_status)):
             app.add_handler(CommandHandler(name, handler))
         app.add_handler(CallbackQueryHandler(self.on_callback))
