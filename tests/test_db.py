@@ -166,3 +166,38 @@ def test_database_is_usable_from_a_worker_thread():
     d.insert_email(make_email(mid="m1"))
     assert asyncio.run(asyncio.to_thread(d.count_emails)) == 1
     d.close()
+
+
+# ------------------------------------------------------------ expectations
+
+def test_expectations_are_per_day_and_ordered(db):
+    db.add_expectations("2026-09-17", ["fee receipt", "visa letter"])
+    db.add_expectations("2026-09-16", ["old thing"])
+    assert db.expectations_for("2026-09-17") == ["fee receipt", "visa letter"]
+    assert db.expectations_for("2026-09-18") == []
+
+
+def test_expectations_deduplicate_case_insensitively(db):
+    db.add_expectations("2026-09-17", ["Fee Receipt"])
+    db.add_expectations("2026-09-17", ["fee receipt", "visa"])
+    assert db.expectations_for("2026-09-17") == ["Fee Receipt", "visa"]
+
+
+def test_clear_expectations_only_clears_that_day(db):
+    db.add_expectations("2026-09-17", ["a", "b"])
+    db.add_expectations("2026-09-16", ["c"])
+    assert db.clear_expectations("2026-09-17") == 2
+    assert db.expectations_for("2026-09-16") == ["c"]
+
+
+def test_recent_emails_window_and_order_with_mixed_timezones(db):
+    from datetime import timezone
+    now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+    db.insert_email(make_email(mid="naive-recent").model_copy(
+        update={"received_at": datetime(2026, 9, 16, 9, 0)}))
+    db.insert_email(make_email(mid="aware-newest").model_copy(
+        update={"received_at": datetime(2026, 9, 17, 11, 0, tzinfo=timezone.utc)}))
+    db.insert_email(make_email(mid="too-old").model_copy(
+        update={"received_at": datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)}))
+    got = [e.message_id for e in db.recent_emails(days=7, now=now)]
+    assert got == ["aware-newest", "naive-recent"]
