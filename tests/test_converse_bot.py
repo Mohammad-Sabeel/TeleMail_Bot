@@ -199,3 +199,108 @@ def test_forget_ignores_strangers(make_bot):
     u, msg = _update(chat=999)
     asyncio.run(bot.on_forget(u, None))
     assert msg.sent == [] and len(bot.memory) == 1
+
+
+# ------------------------------------------------------------ actions
+
+def _callback(bot, data):
+    edits = []
+    message = _Msg()
+
+    class Q:
+        async def answer(self, *a, **kw): pass
+        async def edit_message_text(self, t, **kw): edits.append(t)
+    q = Q(); q.data = data; q.message = message
+    update = type("U", (), {"effective_chat": type("C", (), {"id": ALLOWED})(),
+                            "callback_query": q})()
+    asyncio.run(bot.on_callback(update, None))
+    return edits, message
+
+
+def _token(msg):
+    markup = msg.kw[-1]["reply_markup"]
+    return markup.inline_keyboard[0][0].callback_data.split(":", 1)[1]
+
+
+def test_sync_request_asks_first_and_runs_only_on_yes(make_bot):
+    bot, _, calls = make_bot(Planner(intent="sync"))
+    u, msg = _update(text="sync my mail please")
+    asyncio.run(bot.on_text(u, None))
+    assert msg.sent[-1] == "Start a sync now?" and calls == []
+    edits, message = _callback(bot, f"confirm:{_token(msg)}")
+    assert calls == ["sync"] and "On it" in edits[0]
+
+
+def test_cancel_runs_nothing(make_bot):
+    bot, _, calls = make_bot(Planner(intent="sync"))
+    u, msg = _update(text="sync")
+    asyncio.run(bot.on_text(u, None))
+    edits, _ = _callback(bot, f"cancel:{_token(msg)}")
+    assert edits == ["Cancelled."] and calls == []
+
+
+def test_confirmation_is_single_use(make_bot):
+    bot, _, calls = make_bot(Planner(intent="sync"))
+    u, msg = _update(text="sync")
+    asyncio.run(bot.on_text(u, None))
+    token = _token(msg)
+    _callback(bot, f"confirm:{token}")
+    edits, _ = _callback(bot, f"confirm:{token}")
+    assert "expired" in edits[0] and calls == ["sync"]
+
+
+def test_confirmation_expires_after_five_minutes(make_bot):
+    bot, _, calls = make_bot(Planner(intent="sync"))
+    u, msg = _update(text="sync")
+    asyncio.run(bot.on_text(u, None))
+    bot.now = lambda: NOW + timedelta(minutes=6)
+    edits, _ = _callback(bot, f"confirm:{_token(msg)}")
+    assert "expired" in edits[0] and calls == []
+
+
+def test_forged_token_is_rejected(make_bot):
+    bot, _, calls = make_bot(Planner())
+    edits, _ = _callback(bot, "confirm:not-a-real-token")
+    assert "expired" in edits[0] and calls == []
+
+
+def test_add_expectation_request_stores_keywords_after_yes(make_bot):
+    bot, _, _ = make_bot(Planner(intent="add_expectation", keywords="visa letter"))
+    u, msg = _update(text="I'm waiting for my visa letter")
+    asyncio.run(bot.on_text(u, None))
+    assert "visa letter" in msg.sent[-1] and bot.db.expectations_for("2026-09-17") == []
+    _callback(bot, f"confirm:{_token(msg)}")
+    assert bot.db.expectations_for("2026-09-17") == ["visa letter"]
+
+
+def test_show_report_without_reports_says_so(make_bot):
+    bot, _, _ = make_bot(Planner(intent="show_report"))
+    u, msg = _update(text="send me the report")
+    asyncio.run(bot.on_text(u, None))
+    _, message = _callback(bot, f"confirm:{_token(msg)}")
+    assert "No report yet" in message.sent[0]
+
+
+def test_show_report_sends_the_newest(make_bot):
+    bot, _, _ = make_bot(Planner(intent="show_report"))
+    bot.reports_dir.mkdir(parents=True)
+    (bot.reports_dir / "report-20260916-090000.pdf").write_bytes(b"%PDF old")
+    (bot.reports_dir / "report-20260917-090000.pdf").write_bytes(b"%PDF new")
+    u, msg = _update(text="report please")
+    asyncio.run(bot.on_text(u, None))
+    _, message = _callback(bot, f"confirm:{_token(msg)}")
+    assert message.documents == ["report.pdf"]
+
+
+def test_forget_also_drops_pending_confirmations(make_bot):
+    bot, _, calls = make_bot(Planner(intent="sync"))
+    u, msg = _update(text="sync")
+    asyncio.run(bot.on_text(u, None))
+    asyncio.run(bot.on_forget(_update()[0], None))
+    edits, _ = _callback(bot, f"confirm:{_token(msg)}")
+    assert "expired" in edits[0] and calls == []
+
+
+def test_help_mentions_talking_and_forget():
+    from telemail.bot import HELP
+    assert "/forget" in HELP and "sync my mail" in HELP

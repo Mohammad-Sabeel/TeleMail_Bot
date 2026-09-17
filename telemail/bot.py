@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from telemail.models import Email, TriageResult
@@ -88,8 +89,9 @@ Works without a model:
 
 Needs `OPENROUTER_API_KEY` and `MODEL_NAME`:
 /ask `<question>` — ask about your inbox in plain English
+/forget — clear the conversation
 
-Any other message is treated as /ask\\."""
+Or just talk: ask a question, or say "sync my mail" — actions ask before running\\."""
 
 ASK_EXPECTED = ("Which emails are you expecting today? Send keywords, comma- or "
                 "line-separated — e.g. fee receipt, visa letter.")
@@ -98,6 +100,13 @@ NEEDS_MODEL = ("/ask needs a model. Set OPENROUTER_API_KEY and MODEL_NAME in .en
                "/suspicious /search /status")
 NO_ANSWER = ("I couldn't get a usable answer from the model right now. "
              "Slash commands still work.")
+CONFIRM_TTL = timedelta(minutes=5)
+
+
+def confirmation_text(intent: str, keywords: str) -> str:
+    return {"sync": "Start a sync now?",
+            "show_report": "Send the latest report?",
+            "add_expectation": f"Add “{keywords}” to today's expected emails?"}[intent]
 
 
 def format_email_line(email, triage=None) -> str:
@@ -370,6 +379,8 @@ class TeleMailBot:
         # Conversation memory: the user's messages and the bot's answers only —
         # never retrieved email text, so an email cannot steer later turns.
         self.memory: deque[tuple[str, str]] = deque(maxlen=10)
+        # token -> (intent, keywords, expires_at); single use, see on_callback.
+        self._pending: dict[str, tuple[str, str, datetime]] = {}
 
     # ------------------------------------------------------------ guards
 
@@ -412,6 +423,27 @@ class TeleMailBot:
         if data == "expect:skip":
             self._awaiting_keywords = None
             await query.edit_message_text("Skipped — use /expect any time.")
+            return
+        if data.startswith(("confirm:", "cancel:")):
+            action, _, token = data.partition(":")
+            pending = self._pending.pop(token, None)          # single use
+            if pending is None or pending[2] < self.now():
+                await query.edit_message_text(
+                    "This confirmation has expired — send your request again.")
+                return
+            if action == "cancel":
+                await query.edit_message_text("Cancelled.")
+                return
+            intent, keywords, _ = pending
+            await query.edit_message_text("✅ On it.")
+            shim = type("U", (), {"effective_chat": update.effective_chat,
+                                  "message": query.message})()
+            if intent == "sync":
+                await self.on_sync(shim, None)
+            elif intent == "add_expectation":
+                await self._add_expectations(shim, keywords)
+            else:
+                await self._send_latest_report(shim)
             return
         if data.startswith("open:"):
             # Read-only: shows stored metadata; the summary message is left intact.
@@ -498,6 +530,7 @@ class TeleMailBot:
         if not self._guard(update):
             return
         self.memory.clear()
+        self._pending.clear()
         await update.message.reply_text("Conversation forgotten.")
 
     async def on_start(self, update, _context) -> None:
@@ -579,7 +612,20 @@ class TeleMailBot:
             await self._add_expectations(update, update.message.text or "")
             return
 
-        await self._handle_question(update, update.message.text or "")
+        text = update.message.text or ""
+        if not self._planner_ready():
+            await update.message.reply_text(NEEDS_MODEL)
+            return
+        intent = await asyncio.to_thread(interpret, self.planner, text, list(self.memory))
+        if intent.intent == "question":
+            await self._handle_question(update, text)
+            return
+        token = secrets.token_urlsafe(9)
+        self._pending[token] = (intent.intent, intent.keywords.strip(),
+                                self.now() + CONFIRM_TTL)
+        await update.message.reply_text(
+            confirmation_text(intent.intent, intent.keywords.strip()),
+            reply_markup=_keyboard([("Yes", f"confirm:{token}"), ("No", f"cancel:{token}")]))
 
     def _expected_lines(self, keywords: list[str]) -> list[ExpectedLine]:
         """Blocking (TF-IDF and a model call per keyword): run via to_thread."""
@@ -662,6 +708,15 @@ class TeleMailBot:
                 level=verdict.level, evidence=verdict.evidence,
                 next_step=verdict.next_step, gist=verdict.gist))
         return entries, not_read
+
+    async def _send_latest_report(self, update) -> None:
+        reports = sorted(self.reports_dir.glob("report-*.pdf")) if self.reports_dir else []
+        if not reports:
+            await update.message.reply_text("No report yet — run /sync first.")
+            return
+        with open(reports[-1], "rb") as fh:
+            await update.message.reply_document(document=fh, filename="report.pdf",
+                                                caption="Latest report")
 
     async def on_sync(self, update, _context) -> None:
         """Fetch, triage and summarise — only when asked. Blocking Gmail and
