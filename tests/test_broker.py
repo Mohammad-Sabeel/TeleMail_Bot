@@ -179,3 +179,37 @@ def test_approval_targets_the_bound_message_not_a_later_claim(env):
     tid = broker.register_transaction(message_id="m1", action="mark_read")
     broker.approve(tid, actor="user")
     assert writer.calls == [("mark_read", "m1")]         # never m2
+
+
+# ------------------------------------------------------------ read_message
+
+class ReadingAdapter(FakeAdapter):
+    def read_message(self, message_id):
+        self.calls.append(("read_message", message_id))
+        return {"message_id": message_id, "body": "text", "attachments": [],
+                "links": [], "untrusted": True}
+
+
+def test_read_message_executes_and_is_audited():
+    db = Database(":memory:")
+    db.insert_email(Email(message_id="m1", thread_id="t1", sender_email="a@uni.edu",
+                          sender_domain="uni.edu", subject="s", snippet="x",
+                          received_at=datetime(2026, 9, 1), signals=SenderSignals()))
+    adapter = ReadingAdapter()
+    r = Broker(db, adapter).execute({"op": "read_message", "message_id": "m1"},
+                                    actor="report")
+    assert r.ok and r.data["body"] == "text"
+    assert adapter.calls == [("read_message", "m1")]
+    assert [e["event"] for e in db.audit_entries()] == ["proposed", "accepted", "executed"]
+
+
+@pytest.mark.parametrize("raw,why", [
+    ({"op": "read_message", "message_id": "unknown"}, "unknown message"),
+    ({"op": "read_message", "message_id": "../../x"}, "path in id"),
+    ({"op": "read_message"}, "missing id"),
+    ({"op": "read_message", "message_id": "m1", "extra": 1}, "extra field"),
+])
+def test_read_message_rejections(env, raw, why):
+    db, broker, adapter, _ = env
+    assert broker.execute(raw, actor="planner").ok is False, why
+    assert adapter.calls == []

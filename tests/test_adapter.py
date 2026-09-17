@@ -221,3 +221,45 @@ def test_other_http_errors_are_not_mistaken_for_deletion():
     from telemail.gmail.adapter import MessageGone
     with pytest.raises(_HttpErr):
         GmailReadAdapter(_RaisingService(500)).fetch_metadata("x")
+
+
+# ------------------------------------------------------------ read_message
+
+FULL = {"id": "m1", "payload": {"mimeType": "multipart/mixed", "parts": [
+    {"mimeType": "multipart/alternative", "parts": [
+        {"mimeType": "text/plain",
+         "body": {"data": b64("Pay now at https://198.51.100.7/login please")}},
+        {"mimeType": "text/html",
+         "body": {"data": b64('<p>Visit <a href="https://evil.example/x">www.uni.edu</a> '
+                              'or <a href="https://xn--pypal-4ve.com">here</a></p>')}}]},
+    {"mimeType": "application/octet-stream", "filename": "invoice.html",
+     "body": {"attachmentId": "a1"}}]}}
+
+
+def test_read_message_returns_body_attachments_and_links():
+    out = GmailReadAdapter(FakeService({"messages.get": FULL})).read_message("m1")
+    assert out["body"].startswith("Pay now") and out["untrusted"] is True
+    assert out["attachments"] == ["invoice.html"]
+    hrefs = {l["href"] for l in out["links"]}
+    assert {"https://198.51.100.7/login", "https://evil.example/x",
+            "https://xn--pypal-4ve.com"} <= hrefs
+    shown = [l for l in out["links"] if l["href"] == "https://evil.example/x"][0]
+    assert shown["text"] == "www.uni.edu"
+
+
+def test_read_message_uses_full_format():
+    svc = FakeService({"messages.get": FULL})
+    GmailReadAdapter(svc).read_message("m1")
+    assert [kw["format"] for n, kw in svc.calls if n == "messages.get"] == ["full"]
+
+
+def test_read_message_of_deleted_message_raises_message_gone():
+    from telemail.gmail.adapter import MessageGone
+    with pytest.raises(MessageGone):
+        GmailReadAdapter(_RaisingService(404)).read_message("gone")
+
+
+def test_links_from_malformed_html_do_not_raise():
+    from telemail.gmail.adapter import extract_links
+    payload = {"mimeType": "text/html", "body": {"data": b64("<a href='x'>unclosed <b")}}
+    assert isinstance(extract_links(payload), list)

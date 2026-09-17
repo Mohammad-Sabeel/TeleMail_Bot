@@ -46,6 +46,7 @@ class ReadOnlyAdapter(Protocol):
     def search(self, query: str, max_results: int) -> list[dict]: ...
     def get_thread(self, thread_id: str) -> dict: ...
     def summarise(self, thread_id: str) -> dict: ...
+    def read_message(self, message_id: str) -> dict: ...
 
 
 class WriteService(Protocol):
@@ -68,6 +69,7 @@ class Broker:
             "search": lambda i: self.adapter.search(i.query, i.max_results),
             "get_thread": lambda i: self.adapter.get_thread(i.thread_id),
             "summarise": lambda i: self.adapter.summarise(i.thread_id),
+            "read_message": lambda i: self.adapter.read_message(i.message_id),
         }
         self._write = {
             "mark_read": lambda a: self._writer().mark_read(a.message_id),
@@ -101,6 +103,9 @@ class Broker:
         try:
             if intent.op == "search":
                 validate_query(intent.query)
+            elif intent.op == "read_message":
+                if not self.db.message_exists(intent.message_id):
+                    raise BrokerRejection("unknown message_id")
             elif not self.db.thread_exists(intent.thread_id):
                 # A hallucinated id is refused locally, before it reaches Google.
                 raise BrokerRejection("unknown thread_id")
