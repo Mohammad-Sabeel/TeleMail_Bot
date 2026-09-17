@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from telemail.redact import redact
 from telemail.models import Email, TriageResult
 from telemail.report import ReportEntry, build_report, caption, render_pdf
 from telemail.triage.assess import assess_email
@@ -44,7 +45,8 @@ URGENCY_MARK = {5: "🔴", 4: "🟠", 3: "🟡", 2: "⚪", 1: "⚪"}
 
 
 def escape_md(text: str) -> str:
-    return "".join("\\" + c if c in _MD_SPECIAL else c for c in str(text or ""))
+    """Every MarkdownV2 message is built through here, so secrets are hidden here."""
+    return "".join("\\" + c if c in _MD_SPECIAL else c for c in redact(str(text or "")))
 
 
 def is_authorised(chat_id: int | None, allowed_chat_id: int) -> bool:

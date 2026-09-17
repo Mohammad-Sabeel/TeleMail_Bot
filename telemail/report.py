@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from telemail.redact import redact
 from telemail.triage.assess import Level
 
 FONT_CANDIDATES = ("/Library/Fonts/Arial Unicode.ttf",
@@ -59,7 +60,7 @@ def caption(report: SyncReport) -> str:
 
 def _clean(text: str, unicode_font: bool) -> str:
     """Drop emoji and symbols the fonts cannot draw; latin-1 only without a TTF."""
-    kept = "".join(ch for ch in str(text or "")
+    kept = "".join(ch for ch in redact(str(text or ""))
                    if ord(ch) <= 0xFFFF and not 0xFE00 <= ord(ch) <= 0xFE0F
                    and not 0x2600 <= ord(ch) <= 0x27BF)
     if not unicode_font:

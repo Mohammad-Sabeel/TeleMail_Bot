@@ -639,7 +639,7 @@ Report the confusion matrix, not just headline figures. With n≈38, a single fl
 - **Implementation** — the architecture as built, with the boundary test as evidence
 - **Results** — every table from `results.md`
 - **Discussion** — what the L1 column means; why L2 is the interesting cell; what T4 and T11 taught you
-- **Limitations** — single user, metadata to a third party, no attachments, small held-out set, prompt delimitation is defence in depth not the control, the broker stops actions not misleading text
+- **Limitations** — single user, metadata to a third party, no attachments, small held-out set, prompt delimitation is defence in depth not the control, the broker stops actions not misleading text; answers could repeat secrets from mail (observed 2026-09-17: a reset password quoted into Telegram) — mitigated by keyword-anchored redaction at the output edge (`telemail/redact.py`, 7/230 real emails hidden, 1 over-hide), which still lets the model provider see the secret and misses secrets with no nearby keyword
 - **Future work** — local inference, isolated write service, Pub/Sub push, multi-user
 
 Write limitations properly. At M.Sc. level a candid one earns more than a thin one costs.
