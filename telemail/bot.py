@@ -171,6 +171,30 @@ def open_buttons(summary: SyncSummary) -> list[tuple[str, str]]:
     return out
 
 
+def format_email_details(email: Email, triage: TriageResult | None) -> str:
+    """Metadata and verdict only. Never snippet or body text."""
+    s = email.signals
+    auth = f"SPF {s.spf} · DKIM {s.dkim} · DMARC {s.dmarc}"
+    if not s.auth_source:
+        auth += " (no trusted assertion)"
+    lines = [f"*From:* {escape_md(email.sender_name or email.sender_email)}",
+             f"`{escape_md(email.sender_email)}`",
+             f"*Subject:* {escape_md(email.subject)}",
+             f"*Date:* {escape_md(f'{email.received_at:%d %b %Y %H:%M}')}",
+             f"*Sender checks:* {escape_md(auth)}"]
+    failed = s.failed_checks()
+    if failed:
+        lines.append(f"⚠️ *Failed:* {escape_md(', '.join(failed))}")
+    if triage:
+        lines += ["",
+                  f"*Verdict:* {escape_md(triage.category)}, urgency {triage.urgency} "
+                  f"\\({escape_md(triage.source)}\\)",
+                  f"_{escape_md(triage.reason)}_"]
+    else:
+        lines += ["", "_Not triaged yet_"]
+    return "\n".join(lines)
+
+
 def format_search_results(rows: list[dict]) -> str:
     if not rows:
         return "_No matching messages_"
@@ -259,6 +283,17 @@ class TeleMailBot:
         await query.answer()
 
         data = str(query.data or "")
+        if data.startswith("open:"):
+            # Read-only: shows stored metadata; the summary message is left intact.
+            email = self.db.get_email(data[len("open:"):])
+            if email is None:
+                await query.message.reply_text(
+                    "That email is no longer in the database.")
+                return
+            await query.message.reply_text(
+                format_email_details(email, self.db.get_triage(email.message_id)),
+                parse_mode="MarkdownV2")
+            return
         if not data.startswith("tx:"):
             await query.edit_message_text("Unrecognised action")
             return

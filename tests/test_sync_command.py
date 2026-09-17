@@ -114,3 +114,83 @@ def test_open_buttons_skip_ids_too_long_for_telegram():
     long_id = "x" * 70
     items = [(mail(long_id), tr(long_id, 5))]
     assert open_buttons(build_sync_summary(items)) == []
+
+
+# ------------------------------------------------------------ [Open]
+
+from telemail.bot import TeleMailBot, format_email_details
+from telemail.broker.broker import Broker
+from telemail.db import Database
+
+ALLOWED = 123456
+MARKER = "SNIPPET-MUST-NOT-APPEAR"
+
+
+def test_details_show_metadata_and_verdict():
+    e = mail("a", spf="pass", dkim="pass", dmarc="pass", auth_source="mx.google.com")
+    text = format_email_details(e, tr("a", 5))
+    assert "Someone" in text and "Subject a" in text
+    assert "SPF pass" in text and "urgency 5" in text and "reason text" in text
+
+
+def test_details_warn_on_failed_checks_and_missing_assertion():
+    text = format_email_details(mail("a", spf="fail", dmarc="fail"), None)
+    assert "Failed" in text and "spf" in text
+    assert "no trusted assertion" in text
+    assert "Not triaged yet" in text
+
+
+def test_details_never_include_snippet_or_body():
+    e = mail("a").model_copy(update={"snippet": MARKER})
+    assert MARKER not in format_email_details(e, tr("a", 5))
+
+
+class _Reply:
+    def __init__(self): self.sent = []
+    async def reply_text(self, t, **kw): self.sent.append((t, kw))
+
+
+def _callback_update(data, chat=ALLOWED):
+    reply = _Reply()
+
+    class Q:
+        message = reply
+        async def answer(self, *a, **kw): pass
+        async def edit_message_text(self, *a, **kw):
+            raise AssertionError("[Open] must not overwrite the summary")
+
+    q = Q(); q.data = data
+    update = type("U", (), {"effective_chat": type("C", (), {"id": chat})(),
+                            "callback_query": q})()
+    return update, reply
+
+
+@pytest.fixture
+def open_env():
+    db = Database(":memory:")
+    db.insert_email(mail("m1").model_copy(update={"snippet": MARKER}))
+    db.upsert_triage(tr("m1", 5))
+    return db, TeleMailBot("tok", ALLOWED, db=db, broker=Broker(db, None))
+
+
+def test_open_replies_with_details_without_body(open_env):
+    _, bot = open_env
+    update, reply = _callback_update("open:m1")
+    asyncio.run(bot.on_callback(update, None))
+    text, kw = reply.sent[0]
+    assert "Subject m1" in text and kw.get("parse_mode") == "MarkdownV2"
+    assert MARKER not in text
+
+
+def test_open_unknown_id_is_rejected(open_env):
+    _, bot = open_env
+    update, reply = _callback_update("open:does-not-exist")
+    asyncio.run(bot.on_callback(update, None))
+    assert "no longer" in reply.sent[0][0]
+
+
+def test_open_ignores_strangers(open_env):
+    _, bot = open_env
+    update, reply = _callback_update("open:m1", chat=999)
+    asyncio.run(bot.on_callback(update, None))
+    assert reply.sent == []
