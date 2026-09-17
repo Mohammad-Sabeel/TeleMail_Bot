@@ -22,6 +22,15 @@ class WatermarkExpired(Exception):
     """
 
 
+class MessageGone(Exception):
+    """404 on a message id: it was deleted after appearing in history (one-time
+    codes, purged spam). Permanent, so sync skips it instead of retrying."""
+
+
+def _http_status(e: Exception) -> int | None:
+    return getattr(getattr(e, "resp", None), "status", None)
+
+
 MAX_BODY_CHARS = 8000        # cost bound and exposure bound, in that order
 MAX_THREAD_MESSAGES = 20
 
@@ -135,9 +144,14 @@ class GmailReadAdapter:
 
     def fetch_metadata(self, message_id: str) -> dict:
         """Raw API shape for the sync path; normalise.from_gmail_payload consumes it."""
-        return self._service.users().messages().get(
-            userId=self._user, id=message_id, format="metadata",
-            metadataHeaders=METADATA_HEADERS).execute()
+        try:
+            return self._service.users().messages().get(
+                userId=self._user, id=message_id, format="metadata",
+                metadataHeaders=METADATA_HEADERS).execute()
+        except Exception as e:
+            if _http_status(e) == 404:
+                raise MessageGone(message_id) from e
+            raise
 
     def history(self, start_history_id: str, max_results: int = 500,
                 page_token: str | None = None) -> dict:
@@ -148,8 +162,7 @@ class GmailReadAdapter:
                 historyTypes=["messageAdded"], maxResults=max_results,
                 pageToken=page_token).execute()
         except Exception as e:
-            status = getattr(getattr(e, "resp", None), "status", None)
-            if status == 404:
+            if _http_status(e) == 404:
                 raise WatermarkExpired(start_history_id) from e
             raise
 

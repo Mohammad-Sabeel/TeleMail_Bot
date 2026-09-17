@@ -185,3 +185,39 @@ def test_undecodable_body_returns_empty_not_crash():
 
 def test_missing_payload_is_safe():
     assert extract_body({}) == ""
+
+
+# ---------------------------------------------------- 404 on a message fetch
+
+class _HttpErr(Exception):
+    def __init__(self, status):
+        self.resp = type("R", (), {"status": status})()
+
+
+class _RaisingService(FakeService):
+    def __init__(self, status):
+        super().__init__({})
+        self.status = status
+
+    def messages(self):
+        svc = self
+
+        class _E:
+            def get(self, **kw):
+                class _X:
+                    def execute(self_inner):
+                        raise _HttpErr(svc.status)
+                return _X()
+        return _E()
+
+
+def test_fetch_of_deleted_message_raises_message_gone():
+    from telemail.gmail.adapter import MessageGone
+    with pytest.raises(MessageGone):
+        GmailReadAdapter(_RaisingService(404)).fetch_metadata("gone-id")
+
+
+def test_other_http_errors_are_not_mistaken_for_deletion():
+    from telemail.gmail.adapter import MessageGone
+    with pytest.raises(_HttpErr):
+        GmailReadAdapter(_RaisingService(500)).fetch_metadata("x")
