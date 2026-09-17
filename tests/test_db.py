@@ -154,3 +154,15 @@ def test_watermark_round_trip(db):
     db.set_state("history_id", "123456")
     db.set_state("history_id", "123457")
     assert db.get_state("history_id") == "123457"
+
+
+# ------------------------------------------------ used from a worker thread
+
+def test_database_is_usable_from_a_worker_thread():
+    """/sync runs Gmail and triage via asyncio.to_thread, so the connection made
+    on the main thread must work there too."""
+    import asyncio
+    d = Database(":memory:")
+    d.insert_email(make_email(mid="m1"))
+    assert asyncio.run(asyncio.to_thread(d.count_emails)) == 1
+    d.close()

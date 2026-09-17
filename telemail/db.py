@@ -116,7 +116,11 @@ class Database:
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.con = sqlite3.connect(self.path)
+        # The bot runs sync and triage via asyncio.to_thread. SQLite is built
+        # serialized (sqlite3.threadsafety == 3), so one connection may be
+        # shared across threads; /sync's lock keeps syncs from overlapping.
+        # ponytail: shared connection; add a write lock if concurrent writers appear.
+        self.con = sqlite3.connect(self.path, check_same_thread=False)
         self.con.row_factory = sqlite3.Row
         self.con.execute("PRAGMA foreign_keys = ON")
         self.con.executescript(SCHEMA)

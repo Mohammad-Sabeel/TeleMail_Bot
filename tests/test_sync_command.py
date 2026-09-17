@@ -318,3 +318,23 @@ def test_sync_without_wiring_says_so():
 
 def test_help_lists_sync():
     assert "/sync" in HELP
+
+
+def test_sync_that_writes_the_database_works_through_the_thread_path():
+    """Regression: the fakes above never touched the db, so a real /sync crashed
+    on SQLite's same-thread check. This sync_fn writes, via to_thread."""
+    db = Database(":memory:")
+
+    def sync_fn():
+        db.insert_email(mail("real"))
+        return SyncStats(fetched=1, inserted=1, inserted_ids=["real"])
+
+    def triage_fn():
+        db.upsert_triage(tr("real", 5))
+        return len(db.untriaged(100))
+
+    bot = TeleMailBot("tok", ALLOWED, db=db, broker=Broker(db, None),
+                      sync_fn=sync_fn, triage_fn=triage_fn)
+    update, msg = _update()
+    asyncio.run(bot.on_sync(update, None))
+    assert "1 new · 1 important" in msg.progress.edits[-1][0]
