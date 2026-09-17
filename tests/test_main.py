@@ -192,3 +192,30 @@ def test_unconfigured_model_leaves_mail_untriaged_not_fallback():
     assert [v.message_id for v in verdicts] == ["bulk"]
     assert app.db.get_triage("judgement") is None
     assert "fallback" not in app.db.source_counts()
+
+
+# ------------------------------------------------------------ Feature A wiring
+
+def test_triage_all_empties_the_queue_across_batches():
+    from telemail.__main__ import triage_all
+    app = app_with(RecordingPlanner())
+    for i in range(95):
+        app.db.insert_email(mail(f"m{i}"))
+    assert triage_all(app, limit=40) == 0
+    assert sum(app.db.source_counts().values()) == 95
+
+
+def test_triage_all_stops_when_the_model_is_down():
+    from telemail.__main__ import triage_all
+    app = app_with(BrokenPlanner())
+    app.db.insert_email(mail("bulk", subject="Sale", unsub=True))
+    app.db.insert_email(mail("judgement"))
+    assert triage_all(app) == 1, "must terminate and report what is left"
+
+
+def test_bot_no_longer_syncs_on_a_timer():
+    import inspect
+    import telemail.__main__ as main_mod
+    src = inspect.getsource(main_mod)
+    assert "run_repeating" not in src
+    assert not hasattr(main_mod, "cycle")
