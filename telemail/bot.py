@@ -24,8 +24,11 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 
 from telemail.models import Email, TriageResult
+from telemail.report import ReportEntry, build_report, caption, render_pdf
+from telemail.triage.assess import assess_email
 from telemail.triage.expect import match_keyword, parse_keywords
 
 log = logging.getLogger(__name__)
@@ -116,14 +119,18 @@ def format_email_list(items: list, empty: str) -> str:
 class ExpectedLine:
     keyword: str
     matches: list[tuple[Email, TriageResult | None, float]]
+    levels: dict[str, str] = field(default_factory=dict)   # message_id -> report level
 
 
-def warning_reason(email: Email, triage: TriageResult | None) -> str | None:
+def warning_reason(email: Email, triage: TriageResult | None,
+                   level: str | None = None) -> str | None:
     """Computed by code. An expected match never removes this."""
     if triage and triage.category == "suspicious":
         return "flagged suspicious"
     if any(getattr(email.signals, k) == "fail" for k in ("spf", "dkim", "dmarc")):
         return "failed sender checks"
+    if level in ("CAUTION", "THREAT"):
+        return f"assessed as {level.lower()}"
     return None
 
 
@@ -185,7 +192,7 @@ def format_expected_section(lines: list[ExpectedLine], number: dict[str, int]) -
             text = (f"{ref}📌 {kw} → *{escape_md(escape_trim(email.subject, 50))}* — "
                     f"{escape_md(escape_trim(email.sender_name or email.sender_email, 30))} "
                     f"\\({escape_md(f'{score:.2f}')}\\)")
-            why = warning_reason(email, triage)
+            why = warning_reason(email, triage, line.levels.get(email.message_id))
             if why:
                 text += f"\n   ⚠️ _matches “{kw}” but {escape_md(why)}_"
             out.append(text)
@@ -232,7 +239,8 @@ def open_buttons(summary: SyncSummary) -> list[tuple[str, str]]:
     return out
 
 
-def format_email_details(email: Email, triage: TriageResult | None) -> str:
+def format_email_details(email: Email, triage: TriageResult | None,
+                         assessment: dict | None = None) -> str:
     """Metadata and verdict only. Never snippet or body text."""
     s = email.signals
     auth = f"SPF {s.spf} · DKIM {s.dkim} · DMARC {s.dmarc}"
@@ -253,6 +261,9 @@ def format_email_details(email: Email, triage: TriageResult | None) -> str:
                   f"_{escape_md(triage.reason)}_"]
     else:
         lines += ["", "_Not triaged yet_"]
+    if assessment:
+        lines += ["", f"*Report verdict:* {escape_md(assessment['level'])}"]
+        lines += [f"• {escape_md(item)}" for item in assessment["evidence"]]
     return "\n".join(lines)
 
 
@@ -325,6 +336,9 @@ class TeleMailBot:
         self.today = lambda: date.today().isoformat()
         self.now = lambda: datetime.now().astimezone()
         self._awaiting_keywords: str | None = None
+        # Set by the composition root; None disables the reading/report stage
+        # (bots built without it, e.g. in tests, never read mail).
+        self.reports_dir: Path | None = None
 
     # ------------------------------------------------------------ guards
 
@@ -376,7 +390,8 @@ class TeleMailBot:
                     "That email is no longer in the database.")
                 return
             await query.message.reply_text(
-                format_email_details(email, self.db.get_triage(email.message_id)),
+                format_email_details(email, self.db.get_triage(email.message_id),
+                                     self.db.get_assessment(email.message_id)),
                 parse_mode="MarkdownV2")
             return
         if not data.startswith("tx:"):
@@ -505,9 +520,11 @@ class TeleMailBot:
         lines = []
         for keyword in keywords:
             m = match_keyword(self.planner, keyword, emails)
+            levels = {e.message_id: a["level"] for e, _, _ in m.matches
+                      if (a := self.db.get_assessment(e.message_id))}
             lines.append(ExpectedLine(keyword, [
                 (e, self.db.get_triage(e.message_id), score)
-                for e, score, _ in m.matches]))
+                for e, score, _ in m.matches], levels))
         return lines
 
     async def _reply_expected(self, update, keywords: list[str]) -> None:
@@ -545,6 +562,39 @@ class TeleMailBot:
             await self._reply_expected(update, keywords)
             return
         await self._add_expectations(update, " ".join(args))
+
+    def _is_bulk(self, message_id: str) -> bool:
+        t = self.db.get_triage(message_id)
+        return bool(t and t.source == "prefilter" and t.category == "promotional")
+
+    def _read_and_assess(self, message_ids: list[str]
+                         ) -> tuple[list[ReportEntry], list[tuple[str, str]]]:
+        """Blocking (a Gmail read and a model call per email): run via to_thread.
+        Bodies are read through the broker and discarded; only the verdict is stored."""
+        entries, not_read = [], []
+        for mid in message_ids:
+            email, triage = self.db.get_email(mid), self.db.get_triage(mid)
+            if email is None:
+                continue
+            sender = email.sender_name or email.sender_email
+            if self._is_bulk(mid):
+                not_read.append((sender, email.subject))
+                continue
+            try:
+                result = self.broker.execute({"op": "read_message", "message_id": mid},
+                                             actor="report")
+                read = result.data if result.ok else None
+            except Exception:
+                log.exception("could not read %s", mid)
+                read = None
+            verdict = assess_email(email, triage, read, self.planner)
+            self.db.upsert_assessment(mid, verdict.level.name, verdict.evidence)
+            entries.append(ReportEntry(
+                message_id=mid, sender=sender, subject=email.subject,
+                date=email.received_at, urgency=triage.urgency if triage else 0,
+                level=verdict.level, evidence=verdict.evidence,
+                next_step=verdict.next_step, gist=verdict.gist))
+        return entries, not_read
 
     async def on_sync(self, update, _context) -> None:
         """Fetch, triage and summarise — only when asked. Blocking Gmail and
@@ -585,6 +635,19 @@ class TeleMailBot:
             elif remaining:
                 notes.append(f"Model unavailable — {remaining} email(s) left untriaged.")
 
+            report = None
+            if stats.inserted_ids and self.reports_dir is not None:
+                to_read = [i for i in stats.inserted_ids if not self._is_bulk(i)]
+                await progress.edit_text(f"📖 Reading {len(to_read)} new email(s) "
+                                         f"for the report…")
+                try:
+                    entries, not_read = await asyncio.to_thread(
+                        self._read_and_assess, stats.inserted_ids)
+                    report = build_report(entries, not_read, self.now())
+                except Exception:
+                    log.exception("report failed")
+                    notes.append("The report could not be built this time.")
+
             items = [(self.db.get_email(i), self.db.get_triage(i))
                      for i in stats.inserted_ids]
             keywords = self.db.expectations_for(self.today())
@@ -594,6 +657,14 @@ class TeleMailBot:
             await progress.edit_text(format_sync_summary(summary, notes),
                                      parse_mode="MarkdownV2",
                                      reply_markup=_keyboard(open_buttons(summary)))
+
+            if report is not None:
+                path = await asyncio.to_thread(
+                    render_pdf, report,
+                    self.reports_dir / f"report-{self.now():%Y%m%d-%H%M%S}.pdf")
+                with open(path, "rb") as fh:
+                    await update.message.reply_document(
+                        document=fh, filename="report.pdf", caption=caption(report))
 
             if self.db.get_state("expect_asked_on") != self.today():
                 self.db.set_state("expect_asked_on", self.today())

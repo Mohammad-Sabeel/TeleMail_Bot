@@ -16,6 +16,7 @@ import argparse
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 
 from telemail.bot import TeleMailBot
 from telemail.broker.broker import Broker
@@ -66,6 +67,7 @@ def build_app(db_path: str | None = None) -> App:
                               adapter=adapter))
     app.bot.sync_fn = app.sync.poll
     app.bot.triage_fn = lambda: triage_all(app)
+    app.bot.reports_dir = Path("data/reports")
     return app
 
 
