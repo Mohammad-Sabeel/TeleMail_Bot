@@ -103,6 +103,74 @@ def format_email_list(items: list, empty: str) -> str:
     return "\n\n".join(format_email_line(e, t) for e, t in items)
 
 
+@dataclass
+class SyncSummary:
+    new: int
+    important: int
+    suspicious: list[tuple[Email, TriageResult | None]]
+    top: list[tuple[Email, TriageResult | None]]
+
+    @property
+    def listed(self) -> list[tuple[Email, TriageResult | None]]:
+        """Suspicious first, then top — the order [Open] buttons are numbered in."""
+        return self.suspicious + self.top
+
+
+def build_sync_summary(items: list[tuple[Email | None, TriageResult | None]],
+                       top_n: int = 5) -> SyncSummary:
+    """Pure: which of this sync's emails to show, and in what order.
+
+    Every suspicious email is shown (uncapped, newest first); then the top
+    `top_n` of the rest by urgency, newest first on ties. Untriaged emails rank
+    last. No email appears twice.
+    """
+    pairs = [(e, t) for e, t in items if e is not None]
+
+    def newest(pair):
+        return -pair[0].received_at.timestamp()
+
+    suspicious = sorted((p for p in pairs if p[1] and p[1].category == "suspicious"),
+                        key=newest)
+    shown = {e.message_id for e, _ in suspicious}
+    rest = sorted((p for p in pairs if p[0].message_id not in shown),
+                  key=lambda p: (-(p[1].urgency if p[1] else 0), newest(p)))
+    return SyncSummary(new=len(pairs),
+                       important=sum(1 for _, t in pairs if t and t.urgency >= 4),
+                       suspicious=suspicious, top=rest[:top_n])
+
+
+def format_sync_summary(summary: SyncSummary, notes: list[str] | tuple = ()) -> str:
+    if not summary.new:
+        lines = ["📭 *No new mail*"]
+    else:
+        lines = ["📬 *Sync complete*",
+                 escape_md(f"{summary.new} new · {summary.important} important · "
+                           f"{len(summary.suspicious)} suspicious")]
+        n = 0
+        for title, group in (("⚠️ *Suspicious*", summary.suspicious),
+                             ("📌 *Top emails*", summary.top)):
+            if not group:
+                continue
+            lines += ["", title]
+            for email, triage in group:
+                n += 1
+                lines.append(f"*{n}\\.* " + format_email_line(email, triage))
+    if notes:
+        lines += [""] + [f"_{escape_md(note)}_" for note in notes]
+    return "\n".join(lines)
+
+
+def open_buttons(summary: SyncSummary) -> list[tuple[str, str]]:
+    """(label, callback_data) per listed email. Telegram caps callback data at
+    64 bytes, so an id that does not fit gets no button rather than a broken one."""
+    out = []
+    for i, (email, _) in enumerate(summary.listed, 1):
+        data = f"open:{email.message_id}"
+        if len(data.encode()) <= 64:
+            out.append((f"Open {i}", data))
+    return out
+
+
 def format_search_results(rows: list[dict]) -> str:
     if not rows:
         return "_No matching messages_"
