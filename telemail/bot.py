@@ -20,6 +20,7 @@ The pure functions below are tested directly; the handlers are thin wrappers.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -66,6 +67,8 @@ def format_alert(email: Email, triage: TriageResult) -> str:
 
 
 HELP = """*TeleMail*
+
+/sync — fetch new mail, triage it, and summarise it
 
 Works without a model:
 /recent `[n]` — latest messages
@@ -195,6 +198,17 @@ def format_email_details(email: Email, triage: TriageResult | None) -> str:
     return "\n".join(lines)
 
 
+def _keyboard(buttons: list[tuple[str, str]]):
+    """Inline keyboard, three buttons per row. None when there is nothing to open."""
+    if not buttons:
+        return None
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=data) for label, data in row]
+         for row in rows])
+
+
 def format_search_results(rows: list[dict]) -> str:
     if not rows:
         return "_No matching messages_"
@@ -237,13 +251,18 @@ class TeleMailBot:
     """Thin I/O shell. All decisions live in the pure functions above."""
 
     def __init__(self, token: str, allowed_chat_id: int, *, db, broker,
-                 planner=None, adapter=None):
+                 planner=None, adapter=None, sync_fn=None, triage_fn=None):
         self.token = token
         self.allowed_chat_id = int(allowed_chat_id)
         self.db = db
         self.broker = broker
         self.planner = planner
         self.adapter = adapter
+        # Injected by the composition root so the bot never imports sync or
+        # triage: sync_fn() -> SyncStats, triage_fn() -> emails still untriaged.
+        self.sync_fn = sync_fn
+        self.triage_fn = triage_fn
+        self._sync_lock = asyncio.Lock()
 
     # ------------------------------------------------------------ guards
 
@@ -409,6 +428,52 @@ class TeleMailBot:
             args = (update.message.text or "").split()
         await self.on_ask(update, _Ctx())
 
+    async def on_sync(self, update, _context) -> None:
+        """Fetch, triage and summarise — only when asked. Blocking Gmail and
+        model calls run off the event loop so the bot keeps answering."""
+        if not self._guard(update):
+            return
+        if self.sync_fn is None or self.triage_fn is None:
+            await update.message.reply_text("Sync is not configured.")
+            return
+        if self._sync_lock.locked():
+            await update.message.reply_text("⏳ Sync already running.")
+            return
+
+        async with self._sync_lock:
+            progress = await update.message.reply_text("🔄 Syncing: fetching mail…")
+            try:
+                stats = await asyncio.to_thread(self.sync_fn)
+            except Exception:
+                log.exception("sync failed")
+                await progress.edit_text("❌ Gmail sync failed. Nothing was lost — "
+                                         "run /sync again.")
+                return
+
+            notes = []
+            if stats.errors:
+                notes.append(f"{len(stats.errors)} email(s) could not be fetched; "
+                             f"the next /sync retries them.")
+
+            await progress.edit_text(f"🔄 Syncing: {stats.inserted} new — triaging…")
+            try:
+                remaining = await asyncio.to_thread(self.triage_fn)
+            except Exception:
+                log.exception("triage failed")
+                remaining = None
+            if remaining is None:
+                notes.append("Triage failed; untriaged emails are retried on the "
+                             "next /sync.")
+            elif remaining:
+                notes.append(f"Model unavailable — {remaining} email(s) left untriaged.")
+
+            items = [(self.db.get_email(i), self.db.get_triage(i))
+                     for i in stats.inserted_ids]
+            summary = build_sync_summary(items)
+            await progress.edit_text(format_sync_summary(summary, notes),
+                                     parse_mode="MarkdownV2",
+                                     reply_markup=_keyboard(open_buttons(summary)))
+
     async def on_status(self, update, _context) -> None:
         if not self._guard(update):
             return
@@ -426,7 +491,8 @@ class TeleMailBot:
                                   CommandHandler)
         from telegram.ext import MessageHandler, filters
         app = ApplicationBuilder().token(self.token).build()
-        for name, handler in (("start", self.on_start), ("help", self.on_start),
+        for name, handler in (("sync", self.on_sync),
+                              ("start", self.on_start), ("help", self.on_start),
                               ("recent", self.on_recent),
                               ("urgent", self.on_urgent),
                               ("suspicious", self.on_suspicious),

@@ -194,3 +194,127 @@ def test_open_ignores_strangers(open_env):
     update, reply = _callback_update("open:m1", chat=999)
     asyncio.run(bot.on_callback(update, None))
     assert reply.sent == []
+
+
+# ------------------------------------------------------------ /sync handler
+
+from telemail.bot import HELP
+from telemail.sync import SyncStats
+
+
+class _Progress:
+    def __init__(self): self.edits = []
+    async def edit_text(self, text, **kw): self.edits.append((text, kw))
+
+
+class _Msg:
+    def __init__(self): self.sent, self.progress = [], _Progress()
+    async def reply_text(self, t, **kw):
+        self.sent.append(t)
+        return self.progress
+
+
+def _update(chat=ALLOWED):
+    msg = _Msg()
+    return type("U", (), {"effective_chat": type("C", (), {"id": chat})(),
+                          "message": msg})(), msg
+
+
+@pytest.fixture
+def sync_env():
+    db = Database(":memory:")
+    for mid, urgency, cat in (("a", 5, "academic"), ("b", 2, "notification"),
+                              ("s", 1, "suspicious")):
+        db.insert_email(mail(mid))
+        db.upsert_triage(tr(mid, urgency, cat))
+    calls = []
+
+    def sync_fn():
+        calls.append("sync")
+        return SyncStats(fetched=3, inserted=3, inserted_ids=["a", "b", "s"])
+
+    def triage_fn():
+        calls.append("triage")
+        return 0
+
+    bot = TeleMailBot("tok", ALLOWED, db=db, broker=Broker(db, None),
+                      sync_fn=sync_fn, triage_fn=triage_fn)
+    return bot, calls
+
+
+def test_sync_runs_stages_in_order_and_shows_summary(sync_env):
+    bot, calls = sync_env
+    update, msg = _update()
+    asyncio.run(bot.on_sync(update, None))
+    assert calls == ["sync", "triage"]
+    assert "fetching" in msg.sent[0]
+    final_text, final_kw = msg.progress.edits[-1]
+    assert "3 new · 1 important · 1 suspicious" in final_text
+    assert final_kw["parse_mode"] == "MarkdownV2"
+    assert final_kw["reply_markup"] is not None
+
+
+def test_progress_message_is_edited_between_stages(sync_env):
+    bot, _ = sync_env
+    update, msg = _update()
+    asyncio.run(bot.on_sync(update, None))
+    assert any("triaging" in text for text, _ in msg.progress.edits)
+
+
+def test_second_sync_while_running_is_refused(sync_env):
+    bot, calls = sync_env
+    update, msg = _update()
+
+    async def run():
+        async with bot._sync_lock:
+            await bot.on_sync(update, None)
+    asyncio.run(run())
+    assert "already running" in msg.sent[0]
+    assert calls == []
+
+
+def test_gmail_failure_is_named_and_triage_skipped(sync_env):
+    bot, calls = sync_env
+
+    def broken():
+        raise ConnectionError("gmail down")
+    bot.sync_fn = broken
+    update, msg = _update()
+    asyncio.run(bot.on_sync(update, None))
+    assert "Gmail sync failed" in msg.progress.edits[-1][0]
+    assert "triage" not in calls
+
+
+def test_untriaged_remainder_is_reported(sync_env):
+    bot, _ = sync_env
+    bot.triage_fn = lambda: 2
+    update, msg = _update()
+    asyncio.run(bot.on_sync(update, None))
+    assert "2 email\\(s\\) left untriaged" in msg.progress.edits[-1][0]
+
+
+def test_fetch_errors_are_reported(sync_env):
+    bot, _ = sync_env
+    bot.sync_fn = lambda: SyncStats(inserted=0, errors=["m9: ConnectionError"])
+    update, msg = _update()
+    asyncio.run(bot.on_sync(update, None))
+    assert "could not be fetched" in msg.progress.edits[-1][0]
+
+
+def test_sync_ignores_strangers(sync_env):
+    bot, calls = sync_env
+    update, msg = _update(chat=999)
+    asyncio.run(bot.on_sync(update, None))
+    assert msg.sent == [] and calls == []
+
+
+def test_sync_without_wiring_says_so():
+    db = Database(":memory:")
+    bot = TeleMailBot("tok", ALLOWED, db=db, broker=Broker(db, None))
+    update, msg = _update()
+    asyncio.run(bot.on_sync(update, None))
+    assert "not configured" in msg.sent[0]
+
+
+def test_help_lists_sync():
+    assert "/sync" in HELP
