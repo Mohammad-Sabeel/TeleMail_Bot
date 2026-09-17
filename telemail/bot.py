@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from telemail.models import Email, TriageResult
 
@@ -107,60 +107,112 @@ def format_email_list(items: list, empty: str) -> str:
 
 
 @dataclass
+class ExpectedLine:
+    keyword: str
+    matches: list[tuple[Email, TriageResult | None, float]]
+
+
+def warning_reason(email: Email, triage: TriageResult | None) -> str | None:
+    """Computed by code. An expected match never removes this."""
+    if triage and triage.category == "suspicious":
+        return "flagged suspicious"
+    if any(getattr(email.signals, k) == "fail" for k in ("spf", "dkim", "dmarc")):
+        return "failed sender checks"
+    return None
+
+
+@dataclass
 class SyncSummary:
     new: int
     important: int
     suspicious: list[tuple[Email, TriageResult | None]]
     top: list[tuple[Email, TriageResult | None]]
+    expected: list[ExpectedLine] = field(default_factory=list)
 
     @property
     def listed(self) -> list[tuple[Email, TriageResult | None]]:
-        """Suspicious first, then top — the order [Open] buttons are numbered in."""
-        return self.suspicious + self.top
+        """Suspicious, then expected matches, then top — each email once. This is
+        the order [Open] buttons are numbered in."""
+        matched = [(e, t) for line in self.expected for e, t, _ in line.matches]
+        seen, out = set(), []
+        for e, t in self.suspicious + matched + self.top:
+            if e.message_id not in seen:
+                seen.add(e.message_id)
+                out.append((e, t))
+        return out
 
 
 def build_sync_summary(items: list[tuple[Email | None, TriageResult | None]],
-                       top_n: int = 5) -> SyncSummary:
+                       top_n: int = 5, expected=()) -> SyncSummary:
     """Pure: which of this sync's emails to show, and in what order.
 
-    Every suspicious email is shown (uncapped, newest first); then the top
-    `top_n` of the rest by urgency, newest first on ties. Untriaged emails rank
-    last. No email appears twice.
+    Every suspicious email is shown (uncapped, newest first); expected matches
+    next; then the top `top_n` of the rest by urgency, newest first on ties.
+    Untriaged emails rank last. No email appears twice.
     """
     pairs = [(e, t) for e, t in items if e is not None]
+    expected = list(expected)
 
     def newest(pair):
         return -pair[0].received_at.timestamp()
 
     suspicious = sorted((p for p in pairs if p[1] and p[1].category == "suspicious"),
                         key=newest)
-    shown = {e.message_id for e, _ in suspicious}
-    rest = sorted((p for p in pairs if p[0].message_id not in shown),
+    taken = ({e.message_id for e, _ in suspicious}
+             | {e.message_id for line in expected for e, _, _ in line.matches})
+    rest = sorted((p for p in pairs if p[0].message_id not in taken),
                   key=lambda p: (-(p[1].urgency if p[1] else 0), newest(p)))
     return SyncSummary(new=len(pairs),
                        important=sum(1 for _, t in pairs if t and t.urgency >= 4),
-                       suspicious=suspicious, top=rest[:top_n])
+                       suspicious=suspicious, top=rest[:top_n], expected=expected)
+
+
+def format_expected_section(lines: list[ExpectedLine], number: dict[str, int]) -> list[str]:
+    out = ["🎯 *Expected today*"]
+    for line in lines:
+        kw = escape_md(line.keyword)
+        if not line.matches:
+            out.append(f"⏳ {kw} — nothing yet")
+            continue
+        for email, triage, score in line.matches:
+            ref = f"*{number[email.message_id]}\\.* " if email.message_id in number else ""
+            text = (f"{ref}📌 {kw} → *{escape_md(escape_trim(email.subject, 50))}* — "
+                    f"{escape_md(escape_trim(email.sender_name or email.sender_email, 30))} "
+                    f"\\({escape_md(f'{score:.2f}')}\\)")
+            why = warning_reason(email, triage)
+            if why:
+                text += f"\n   ⚠️ _matches “{kw}” but {escape_md(why)}_"
+            out.append(text)
+    return out
 
 
 def format_sync_summary(summary: SyncSummary, notes: list[str] | tuple = ()) -> str:
-    if not summary.new:
-        lines = ["📭 *No new mail*"]
-    else:
+    number = {e.message_id: i for i, (e, _) in enumerate(summary.listed, 1)}
+    if summary.new:
         lines = ["📬 *Sync complete*",
                  escape_md(f"{summary.new} new · {summary.important} important · "
                            f"{len(summary.suspicious)} suspicious")]
-        n = 0
-        for title, group in (("⚠️ *Suspicious*", summary.suspicious),
-                             ("📌 *Top emails*", summary.top)):
-            if not group:
-                continue
-            lines += ["", title]
-            for email, triage in group:
-                n += 1
-                lines.append(f"*{n}\\.* " + format_email_line(email, triage))
+    else:
+        lines = ["📭 *No new mail*"]
+    if summary.suspicious:
+        lines += ["", "⚠️ *Suspicious*"]
+        lines += [f"*{number[e.message_id]}\\.* " + format_email_line(e, t)
+                  for e, t in summary.suspicious]
+    if summary.expected:
+        lines += [""] + format_expected_section(summary.expected, number)
+    if summary.top:
+        lines += ["", "📌 *Top emails*"]
+        lines += [f"*{number[e.message_id]}\\.* " + format_email_line(e, t)
+                  for e, t in summary.top]
     if notes:
         lines += [""] + [f"_{escape_md(note)}_" for note in notes]
     return "\n".join(lines)
+
+
+def format_expected_reply(lines: list[ExpectedLine]) -> str:
+    summary = SyncSummary(new=0, important=0, suspicious=[], top=[], expected=lines)
+    number = {e.message_id: i for i, (e, _) in enumerate(summary.listed, 1)}
+    return "\n".join(format_expected_section(lines, number))
 
 
 def open_buttons(summary: SyncSummary) -> list[tuple[str, str]]:
