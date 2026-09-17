@@ -1,0 +1,124 @@
+{
+ "summary": {
+  "delivered": {
+   "n": 3,
+   "naive": 3,
+   "trusted": 0
+  },
+  "undelivered": {
+   "n": 3,
+   "naive": 3,
+   "trusted": 0
+  }
+ },
+ "rows": [
+  {
+   "fixture": "T11_v1.eml",
+   "condition": "delivered",
+   "naive": {
+    "spf": "pass",
+    "dkim": "pass",
+    "dmarc": "pass",
+    "auth_source": "attacker.example.com"
+   },
+   "trusted": {
+    "spf": "fail",
+    "dkim": "none",
+    "dmarc": "fail",
+    "auth_source": "mx.google.com"
+   },
+   "attacker_wins_naive": true,
+   "attacker_wins_trusted": false
+  },
+  {
+   "fixture": "T11_v1.eml",
+   "condition": "undelivered",
+   "naive": {
+    "spf": "pass",
+    "dkim": "pass",
+    "dmarc": "pass",
+    "auth_source": "attacker.example.com"
+   },
+   "trusted": {
+    "spf": "none",
+    "dkim": "none",
+    "dmarc": "none",
+    "auth_source": ""
+   },
+   "attacker_wins_naive": true,
+   "attacker_wins_trusted": false
+  },
+  {
+   "fixture": "T11_v2.eml",
+   "condition": "delivered",
+   "naive": {
+    "spf": "pass",
+    "dkim": "pass",
+    "dmarc": "pass",
+    "auth_source": "attacker.example.com"
+   },
+   "trusted": {
+    "spf": "fail",
+    "dkim": "none",
+    "dmarc": "fail",
+    "auth_source": "mx.google.com"
+   },
+   "attacker_wins_naive": true,
+   "attacker_wins_trusted": false
+  },
+  {
+   "fixture": "T11_v2.eml",
+   "condition": "undelivered",
+   "naive": {
+    "spf": "pass",
+    "dkim": "pass",
+    "dmarc": "pass",
+    "auth_source": "attacker.example.com"
+   },
+   "trusted": {
+    "spf": "none",
+    "dkim": "none",
+    "dmarc": "none",
+    "auth_source": ""
+   },
+   "attacker_wins_naive": true,
+   "attacker_wins_trusted": false
+  },
+  {
+   "fixture": "T11_v3.eml",
+   "condition": "delivered",
+   "naive": {
+    "spf": "pass",
+    "dkim": "pass",
+    "dmarc": "pass",
+    "auth_source": "attacker.example.com"
+   },
+   "trusted": {
+    "spf": "fail",
+    "dkim": "none",
+    "dmarc": "fail",
+    "auth_source": "mx.google.com"
+   },
+   "attacker_wins_naive": true,
+   "attacker_wins_trusted": false
+  },
+  {
+   "fixture": "T11_v3.eml",
+   "condition": "undelivered",
+   "naive": {
+    "spf": "pass",
+    "dkim": "pass",
+    "dmarc": "pass",
+    "auth_source": "attacker.example.com"
+   },
+   "trusted": {
+    "spf": "none",
+    "dkim": "none",
+    "dmarc": "none",
+    "auth_source": ""
+   },
+   "attacker_wins_naive": true,
+   "attacker_wins_trusted": false
+  }
+ ]
+}

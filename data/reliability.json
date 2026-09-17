@@ -1,0 +1,23 @@
+{
+ "messages": 201,
+ "triaged": 138,
+ "by_source": {
+  "prefilter": 138
+ },
+ "model_verdicts": 0,
+ "schema_validity": null,
+ "fallback_rate": null,
+ "prefilter_share": 0.6866,
+ "awaiting_model": 63,
+ "broker": {
+  "proposed": 0,
+  "accepted": 0,
+  "rejected": 0,
+  "executed": 0,
+  "by_reason": {}
+ },
+ "unauthorised_updates": 0,
+ "duplicates": 0,
+ "resyncs": 0,
+ "alerts_sent": 20
+}

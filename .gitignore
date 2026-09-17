@@ -1,0 +1,31 @@
+# environment and secrets
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# separate repository (GitHub Pages for the OAuth consent screen)
+site/
+
+# personal files
+Screenshot*.png
+~$*.docx
+
+# data/: credentials, token, database, models and the 250MB corpus stay out.
+# Only the reproducible corpus and the result tables are tracked.
+data/*
+!data/fixtures/
+!data/paired_detection.csv
+!data/injection_transfer.csv
+!data/attack_results.csv
+!data/attack_results_static.csv
+!data/cross_batch.csv
+!data/triage_metrics.json
+!data/reliability.json
+!data/t11_headers.json
+!data/performance.json
+
+# generated knowledge graph (regenerate: graphify update .)
+graphify-out/

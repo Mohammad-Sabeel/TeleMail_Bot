@@ -1,0 +1,21 @@
+Subject: Alert: Your Password has expired
+From: Corpus Harness <harness@example.invalid>
+To: you@example.invalid
+X-TeleMail-Technique: T10
+X-TeleMail-Variant: 2
+X-TeleMail-Source: Nazario.csv
+X-TeleMail-Arm: control
+X-TeleMail-Expected-Level: L0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+monkey.org=C2=A0=C2=A0SUPPORT =C2=A0 =C2=A0 =C2=A0 Dear=C2=A0jose Your passwo=
+rd will expire in=C2=A024 Hours time (26th August, 2021) Kindly confirm passw=
+ord to continue using same password.=C2=A0 =C2=A0=C2=A0=C2=A0=C2=A0=C2=A0=C2=
+=A0 Confirm Password =C2=A0 =C2=A0 Note:=C2=A0monkey.org Support=C2=A0will no=
+t be responsible for any login malfunction after this warning and no verifica=
+tion response. =C2=A0 Thanks and Regards, monkey.org Support (C) 2021 Secured=
+ Service. -=C2=A0This email was sent on 25th August 2021 =C2=A0 Please do not=
+ reply to this email. This auto-mailbox is not monitored and you will not rec=
+eive a response.

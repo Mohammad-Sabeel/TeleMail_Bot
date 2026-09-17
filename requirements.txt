@@ -1,0 +1,14 @@
+google-api-python-client
+google-auth-oauthlib
+python-telegram-bot[job-queue]
+pydantic
+pydantic-settings
+httpx
+scikit-learn
+joblib
+pytest
+
+# Optional — Prompt Guard signal. ~2GB with torch. Install only when you
+# reach the guard work; the pipeline runs fine without it.
+# transformers
+# torch

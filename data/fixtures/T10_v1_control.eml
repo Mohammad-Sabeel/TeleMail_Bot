@@ -1,0 +1,22 @@
+Subject: Email Notification
+From: Corpus Harness <harness@example.invalid>
+To: you@example.invalid
+X-TeleMail-Technique: T10
+X-TeleMail-Variant: 1
+X-TeleMail-Source: Nazario.csv
+X-TeleMail-Arm: control
+X-TeleMail-Expected-Level: L0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: base64
+MIME-Version: 1.0
+
+RGVhciBVc2VyVGhpcyBub3RpZmljYXRpb24gd2FzIHNlbnQgdG/CoCBiZWNhdXNlIHlvdeKAmXZl
+IHJlY2VudGx5IGFncmVlZCB0byBkZWxldGUgeW91ciBhY2NvdW50wqAsIFJlcXVlc3Qgd2lsbCBi
+ZSBncmFudGVkIHdpdGhpbiAyNGhycyBhbmQgeW91ciBBY2NvdW50IHdpbGwgYmUgZGVsZXRlZC4g
+SWYgeW91IG1hZGUgdGhpcyBjaGFuZ2UsIHlvdeKAmXJlIGFsbCBzZXQuwqBJZiBub3QsIHBsZWFz
+ZSBzdG9wIHJlcXVlc3QgdG8gY29udGludWUgdXNpbmcgeW91ciBBY2NvdW50IHRvIGF2b2lkwqBw
+ZXJtYW5lbnQgaGFyZHdhcmUgZmFpbHVyZSBpbiBzeXN0ZW0gZGlyZWN0b3J5wqDCoMKgwqDCoMKg
+wqDCoMKgQ29udGludWUgdXNpbmfCoCAgwqDCoMKgwqDCoMKgwqDCoMKgwqDCoMKgwqDCoMKgwqDC
+oMKgwqDCoMKgwqDCoMKgwqDCoMKgwqDCoMKgIMKgwqDCoMKgwqDCoMKgwqDCoMKgwqDCoMKgwqDC
+oMKgwqDCoMKgwqDCoMKgwqDCoMKgwqDCoMKgIFBsZWFzZSBub3RlIHRoYXQgdGhpcyB1cGRhdGVz
+IGFyZSB2ZXJ5IG1hbmRhdG9yeQo=

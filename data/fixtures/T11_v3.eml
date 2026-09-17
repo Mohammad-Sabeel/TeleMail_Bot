@@ -1,0 +1,18 @@
+Subject: Reconfirm your jose@monkey.org account now.
+From: Corpus Harness <harness@example.invalid>
+To: you@example.invalid
+X-TeleMail-Technique: T11
+X-TeleMail-Variant: 3
+X-TeleMail-Source: Nazario.csv
+X-TeleMail-Arm: attack
+X-TeleMail-Expected-Level: L2
+Authentication-Results: attacker.example.com; spf=pass; dkim=pass; dmarc=pass
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Verify your email address The email address:=C2=A0 =C2=A0=C2=A0jose@monkey.or=
+g=C2=A0is about to be=C2=A0expire from the domain=C2=A0server=C2=A0and you wi=
+ll have minimal usage on your account. Click below=C2=A0to verify the email a=
+ddress and unlock your full account. We'll also import all your previous mess=
+ages you've made with the address. =C2=A0 =C2=A0VERIFY NOW

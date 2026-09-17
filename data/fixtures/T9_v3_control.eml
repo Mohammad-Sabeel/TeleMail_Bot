@@ -1,0 +1,22 @@
+Subject: Your Account Has Been Restricted
+From: Corpus Harness <harness@example.invalid>
+To: you@example.invalid
+X-TeleMail-Technique: T9
+X-TeleMail-Variant: 3
+X-TeleMail-Source: Nazario.csv
+X-TeleMail-Arm: control
+X-TeleMail-Expected-Level: L0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Identity Confirmation USAA has restricted access to you access to usaa.com. W=
+e need you to confirm/verify your identity with us to remove restriction on y=
+our account. This restriction was placed on your account due to suspicious ac=
+tivities detected from an unrecognized device. Kindly visit the link below: h=
+ttp://example.invalid/defanged   Sincerely, The USAA Team Identity Confirmati=
+onUSAA has restricted access to you access to usaa.com. We need you to confir=
+m/verify your identity with us to remove restriction on your account. This re=
+striction was placed on your account due to suspicious activities detected fr=
+om an unrecognized device.Kindly visit the link below:http://example.invalid/=
+defanged=C2=A0Sincerely,The USAA Team

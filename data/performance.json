@@ -1,0 +1,49 @@
+{
+ "broker_overhead": {
+  "unit": "microseconds",
+  "brokered": {
+   "n": 2000,
+   "p50": 21.417,
+   "p95": 28.542
+  },
+  "naive": {
+   "n": 2000,
+   "p50": 1.25,
+   "p95": 1.666
+  },
+  "overhead_p50": 20.167
+ },
+ "pipeline_latency": {
+  "unit": "seconds",
+  "messages_total": 201,
+  "live_messages": 1,
+  "arrival_to_ingest": {
+   "n": 1,
+   "p50": 14.225,
+   "p95": 14.225
+  },
+  "ingest_to_decision": {
+   "n": 1,
+   "p50": 0.003,
+   "p95": 0.003
+  },
+  "decision_to_alert": {
+   "n": 0,
+   "p50": null,
+   "p95": null
+  },
+  "arrival_to_alert": {
+   "n": 0,
+   "p50": null,
+   "p95": null
+  }
+ },
+ "cost": {
+  "calls": 0,
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "model_verdicts": 0,
+  "usd_total": null,
+  "usd_per_1000": null
+ }
+}
