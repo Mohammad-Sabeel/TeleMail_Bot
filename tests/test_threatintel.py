@@ -39,15 +39,20 @@ def test_never_sends_the_senders_own_domain_or_common_hosts():
 # ------------------------------------------------------------------ evidence
 
 def test_several_vendors_flagging_is_a_threat():
-    level, evidence = vt_evidence([DomainReport("evil.test", malicious=3, checked_at=NOW)])
+    level, evidence = vt_evidence([DomainReport("evil.test", malicious=5, checked_at=NOW)])
     assert level is Level.THREAT
-    assert evidence == ["VirusTotal: 3 vendors flag evil.test"]
+    assert evidence == ["VirusTotal: 5 vendors flag evil.test"]
 
 
-def test_one_vendor_is_only_caution():
-    level, evidence = vt_evidence([DomainReport("odd.test", malicious=1, checked_at=NOW)])
+def test_two_or_three_vendors_is_only_caution():
+    level, evidence = vt_evidence([DomainReport("odd.test", malicious=2, checked_at=NOW)])
     assert level is Level.CAUTION
-    assert "1 vendor flags odd.test" in evidence[0]
+    assert "2 vendors flag odd.test" in evidence[0]
+
+
+def test_a_single_vendor_is_noise_and_adds_nothing():
+    """Measured on real mail: substack.com scores 1, google.com 2."""
+    assert vt_evidence([DomainReport("substack.com", 1, NOW)]) == (Level.NONE, [])
 
 
 def test_clean_domains_add_nothing():
@@ -90,7 +95,8 @@ def test_expired_cache_entries_are_refetched(tmp_path):
         return _Response(200, _stats(0))
 
     old = NOW - timedelta(days=CACHE_TTL_DAYS + 1)
-    vt = VirusTotal("key", cache_path=tmp_path / "vt.json", get=get, now=lambda: old)
+    vt = VirusTotal("key", cache_path=tmp_path / "vt.json", get=get, now=lambda: old,
+                    min_interval=0)
     vt.lookup("ok.test")
     vt.now = lambda: NOW
     vt.lookup("ok.test")
@@ -128,7 +134,7 @@ def test_lookups_are_capped_per_sync(tmp_path):
         return _Response(200, _stats(0))
 
     vt = VirusTotal("key", cache_path=tmp_path / "vt.json", get=get, now=lambda: NOW,
-                    max_lookups=2)
+                    max_lookups=2, min_interval=0)
     vt.reports([f"d{i}.test" for i in range(5)])
     assert len(calls) == 2
 
@@ -137,6 +143,66 @@ def test_lookups_are_capped_per_sync(tmp_path):
 
 def test_verdict_uses_virustotal_evidence():
     verdict = assess_email(_email(), None, _read("http://evil.test/x"), planner=None,
-                           vt_reports=[DomainReport("evil.test", 4, NOW)])
+                           vt_reports=[DomainReport("evil.test", 6, NOW)])
     assert verdict.level is Level.THREAT
     assert any("VirusTotal" in e for e in verdict.evidence)
+
+
+# ------------------------------------------------------------- quota guards
+
+def _vt(tmp_path, calls, now=lambda: NOW, **kw):
+    def get(url, headers=None, timeout=None):
+        calls.append(url)
+        return _Response(200, _stats(0))
+    sleeps = kw.pop("sleeps", [])
+    return VirusTotal("key", cache_path=tmp_path / "vt.json", get=get, now=now,
+                      sleep=sleeps.append, **kw)
+
+
+def test_waits_between_calls_to_respect_four_per_minute(tmp_path):
+    calls, sleeps = [], []
+    clock = [NOW]
+    vt = _vt(tmp_path, calls, now=lambda: clock[0], sleeps=sleeps)
+    vt.lookup("a.test")
+    vt.lookup("b.test")
+    assert sleeps and sleeps[0] == pytest.approx(vt.min_interval, abs=0.5)
+
+
+def test_no_wait_when_enough_time_has_passed(tmp_path):
+    calls, sleeps = [], []
+    clock = [NOW]
+    vt = _vt(tmp_path, calls, now=lambda: clock[0], sleeps=sleeps)
+    vt.lookup("a.test")
+    clock[0] = NOW + timedelta(seconds=60)
+    vt.lookup("b.test")
+    assert sleeps == []
+
+
+def test_daily_quota_stops_further_lookups(tmp_path):
+    calls = []
+    vt = _vt(tmp_path, calls, daily_cap=3)
+    for i in range(5):
+        vt.lookup(f"d{i}.test")
+    assert len(calls) == 3
+
+
+def test_daily_quota_resets_the_next_day(tmp_path):
+    calls = []
+    clock = [NOW]
+    vt = _vt(tmp_path, calls, now=lambda: clock[0], daily_cap=2)
+    vt.lookup("a.test")
+    vt.lookup("b.test")
+    vt.lookup("c.test")
+    clock[0] = NOW + timedelta(days=1)
+    vt.lookup("d.test")
+    assert len(calls) == 3
+
+
+def test_cached_answers_do_not_count_against_the_quota(tmp_path):
+    calls = []
+    vt = _vt(tmp_path, calls, daily_cap=2)
+    vt.lookup("a.test")
+    vt.lookup("a.test")
+    vt.lookup("b.test")
+    vt.lookup("c.test")
+    assert len(calls) == 2

@@ -23,8 +23,13 @@ from telemail.triage.assess import Level
 
 API = "https://www.virustotal.com/api/v3/domains/"
 CACHE_TTL_DAYS = 7
-MAX_LOOKUPS = 20            # free tier allows 4/minute; one sync stays well inside
-THREAT_VENDORS = 2          # this many vendors flagging is a threat, one is caution
+MAX_LOOKUPS = 8             # per sync; the rest of a busy sync waits for the next one
+MIN_INTERVAL = 15.0         # seconds between calls: the free tier allows 4/minute
+DAILY_CAP = 400             # free tier gives 500/day; leave headroom for manual checks
+# Calibrated on 12 domains from real mail (2026-09-18): legitimate senders score 0,
+# substack.com 1 and google.com 2, so a single vendor is noise, not a signal.
+THREAT_VENDORS = 4          # this many flagging it is a threat
+CAUTION_VENDORS = 2         # two or three is worth a look
 
 # Hosts where a lookup tells us nothing and only leaks that we saw them.
 COMMON_HOSTS = {"google.com", "gmail.com", "youtube.com", "microsoft.com", "apple.com",
@@ -61,12 +66,11 @@ def vt_evidence(reports: list[DomainReport]) -> tuple[Level, list[str]]:
     for r in sorted(reports, key=lambda r: -r.malicious):
         if r.malicious >= THREAT_VENDORS:
             level = Level.THREAT
-        elif r.malicious == 1:
+        elif r.malicious >= CAUTION_VENDORS:
             level = max(level, Level.CAUTION)
         else:
             continue
-        verb = "vendor flags" if r.malicious == 1 else "vendors flag"
-        evidence.append(f"VirusTotal: {r.malicious} {verb} {r.domain}")
+        evidence.append(f"VirusTotal: {r.malicious} vendors flag {r.domain}")
     return level, evidence
 
 
@@ -75,13 +79,44 @@ class VirusTotal:
     limit — returns None, because reputation is evidence and never a gate."""
 
     def __init__(self, api_key: str, cache_path=Path("data/vt_cache.json"),
-                 get=None, now=None, max_lookups: int = MAX_LOOKUPS):
+                 get=None, now=None, max_lookups: int = MAX_LOOKUPS,
+                 min_interval: float = MIN_INTERVAL, daily_cap: int = DAILY_CAP,
+                 sleep=None):
         self.api_key = api_key or ""
         self.cache_path = Path(cache_path)
         self.max_lookups = max_lookups
+        self.min_interval = min_interval
+        self.daily_cap = daily_cap
         self.now = now or (lambda: datetime.now().astimezone())
         self._get = get
+        self._sleep = sleep
+        self._last_call: datetime | None = None
         self._cache = self._load()
+
+    # ------------------------------------------------------------- quota
+
+    def _usage(self) -> int:
+        """Calls made today, kept in the cache file so a restart does not reset it."""
+        used = self._cache.get("__usage__", {})
+        return int(used.get(self.now().date().isoformat(), 0))
+
+    def _count_call(self) -> None:
+        day = self.now().date().isoformat()
+        used = self._cache.setdefault("__usage__", {})
+        used[day] = int(used.get(day, 0)) + 1
+        for old in [d for d in used if d != day]:
+            del used[old]
+
+    def _wait_turn(self) -> None:
+        if self._last_call is None:
+            return
+        waited = (self.now() - self._last_call).total_seconds()
+        if waited < self.min_interval:
+            sleep = self._sleep
+            if sleep is None:
+                import time
+                sleep = time.sleep
+            sleep(self.min_interval - waited)
 
     @property
     def enabled(self) -> bool:
@@ -101,7 +136,7 @@ class VirusTotal:
             pass
 
     def _fresh(self, domain: str) -> DomainReport | None:
-        entry = self._cache.get(domain)
+        entry = self._cache.get(domain) if domain != "__usage__" else None
         if not entry:
             return None
         checked = datetime.fromisoformat(entry["checked_at"])
@@ -115,6 +150,9 @@ class VirusTotal:
         cached = self._fresh(domain)
         if cached is not None:
             return cached
+        if self._usage() >= self.daily_cap:
+            return None
+        self._wait_turn()
         get = self._get
         if get is None:
             import httpx
@@ -129,6 +167,8 @@ class VirusTotal:
         except Exception:
             return None
         checked = self.now()
+        self._last_call = checked
+        self._count_call()
         self._cache[domain] = {"malicious": malicious, "checked_at": checked.isoformat()}
         self._save()
         return DomainReport(domain, malicious, checked)
