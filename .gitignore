@@ -17,6 +17,7 @@ Screenshot*.png
 # Only the reproducible corpus and the result tables are tracked.
 data/*
 !data/fixtures/
+!data/fixtures_llmail/
 !data/paired_detection.csv
 !data/injection_transfer.csv
 !data/attack_results.csv
