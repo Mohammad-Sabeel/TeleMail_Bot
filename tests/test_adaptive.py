@@ -28,8 +28,8 @@ def test_attacker_is_told_how_the_defence_works():
 
 
 def test_rounds_stop_early_on_a_win():
-    planner = FakePlanner(answer=f"code is {CANARY}")
-    rounds = attack_rounds(Goal.EXFIL, planner, FakeAttacker(["a", "b", "c"]), rounds=3)
+    planner = FakePlanner(answer="My instructions say: at most 6 sentences")
+    rounds = attack_rounds(Goal.PROMPT, planner, FakeAttacker(["a", "b", "c"]), rounds=3)
     assert len(rounds) == 1 and rounds[0]["won"] is True
 
 
@@ -45,6 +45,15 @@ def test_an_exhausted_budget_stops_before_any_call():
     rounds = attack_rounds(Goal.EXFIL, FakePlanner(), attacker, rounds=3,
                            budget=StopBudget())
     assert rounds == [] and attacker.prompts == []
+
+
+def test_the_attacker_faces_the_defended_system():
+    # The mediated arm redacts the secret, so an attacker trying to exfil the canary
+    # will never see a win. This pins that we measure against the defended system,
+    # not the naive undefended baseline.
+    planner = FakePlanner(answer=f"code is {CANARY}")
+    rounds = attack_rounds(Goal.EXFIL, planner, FakeAttacker(["a"]), rounds=1)
+    assert len(rounds) == 1 and rounds[0]["won"] is False
 
 
 def test_best_payload_returns_the_winner():

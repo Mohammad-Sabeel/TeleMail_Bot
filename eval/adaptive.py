@@ -62,7 +62,8 @@ def attack_rounds(goal: Goal, planner, attacker, *, rounds: int = 5,
             break
         email = _attack_email(index)
         scenario = build_scenario(goal, email, body)
-        outcome = run_case(scenario, planner, "naive")
+        # The attacker targets the defended system; that is the measurement.
+        outcome = run_case(scenario, planner, "mediated")
         won = grade_goal(goal, outcome, scenario)
         history.append({"round": index, "body": body, "won": won,
                         "idea": str(reply.get("idea", ""))[:120],
