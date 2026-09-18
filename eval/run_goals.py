@@ -24,6 +24,7 @@ triaging a third time.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 from pathlib import Path
 
@@ -34,11 +35,17 @@ from eval.mock_adapter import MockAdapter
 from eval.naive_arm import naive_execute
 from telemail.bot import format_answer, warning_reason
 from telemail.broker.broker import Broker
+from telemail.budget import Budget
+from telemail.config import get_settings
 from telemail.db import Database
+from telemail.gmail.normalise import from_eml_bytes
 from telemail.models import Email
 from telemail.redact import redact
 from telemail.triage.assess import deterministic_evidence
 from telemail.triage.converse import retrieve
+from telemail.triage.planner import OpenRouterPlanner
+
+FIXTURES_LLMAIL = Path("data/fixtures_llmail")
 
 
 def _dispatch(scenario: Scenario, proposal: dict, arm: str) -> tuple[list[str], bool]:
@@ -155,3 +162,125 @@ def summarise(rows: list[dict]) -> str:
                                        sum(bool(r["won"]) for r in subset),
                                        len(subset)))
     return "\n".join(lines) + "\n"
+
+
+# --- CLI -------------------------------------------------------------------
+#
+# `--source llmail` (and its alias `fixtures`) replays the frozen LLMail-Inject
+# corpus; `--source adaptive` runs the feedback attacker from eval/adaptive.py
+# instead. Either way the model is only ever the planner the settings name —
+# never a literal model id in this file.
+
+
+def parse_args(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--source", choices=("llmail", "adaptive", "fixtures"),
+                    default="llmail")
+    ap.add_argument("--split", choices=("dev", "test"), default="dev",
+                    help="the test split is touched once, at the end of Stage 2")
+    ap.add_argument("--ablation", choices=("full", "no-indicators", "no-vt", "neither"),
+                    default="full")
+    ap.add_argument("--rounds", type=int, default=5)
+    ap.add_argument("--out", default="data/goal_results.csv")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="cap the number of cases processed; 0 means no limit")
+    return ap.parse_args(argv)
+
+
+def _body_text(msg) -> str:
+    """`eval/llmail.py:to_eml` always writes a single plain-text part, so no
+    MIME walk is needed here the way `eval/run_attacks.py` needs one for the
+    hand-built multipart fixtures in data/fixtures."""
+    return str(msg.get_content()) if not msg.is_multipart() else ""
+
+
+def load_cases(source: str, split: str) -> tuple[list, list]:
+    """Attack cases and control cases from the frozen LLMail-Inject fixtures,
+    filtered to one split and round-robined across the six goals so every goal
+    gets comparable coverage without trying all six against every fixture.
+
+    Controls (X-TeleMail-Arm "control") are the false-positive check: they
+    come back separately so the caller can record them under their own
+    source. "unclear" fixtures are skipped — the dataset itself would not say
+    which arm they belong to.
+    """
+    from email import policy
+    from email.parser import BytesParser
+
+    # ponytail: `source` is accepted (and matches the CLI's choices) but not
+    # yet used to pick a directory — there is only one fixture pool today.
+    # Branch here if a second corpus needs its own path.
+    del source
+
+    goals = list(Goal)
+    with (FIXTURES_LLMAIL / "manifest.csv").open() as fh:
+        rows = [r for r in csv.DictReader(fh)
+               if r["split"] == split and r["arm"] != "unclear"]
+
+    attack_cases, control_cases = [], []
+    for index, row in enumerate(rows):
+        raw = (FIXTURES_LLMAIL / row["file"]).read_bytes()
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        email = from_eml_bytes(raw, own_address="you@example.invalid")
+        body = _body_text(msg)
+        goal = goals[index % len(goals)]
+        target = attack_cases if row["arm"] == "attack" else control_cases
+        target.append((goal, email, body))
+    return attack_cases, control_cases
+
+
+def _write_csv(rows: list[dict], out_csv: Path) -> None:
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    with out_csv.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _limited(items: list, limit: int) -> list:
+    return items[:limit] if limit else items
+
+
+def main(argv=None) -> None:
+    args = parse_args(argv)
+    settings = get_settings()
+    planner = OpenRouterPlanner(settings.openrouter_api_key, settings.model_name)
+    # Attach the same daily ceiling adaptive() charges against, so a run
+    # cannot quietly spend past it (OWASP LLM10 — see telemail/budget.py).
+    planner.budget = Budget(daily_tokens=settings.daily_token_budget)
+    out = Path(args.out)
+
+    if args.source == "adaptive":
+        from eval.adaptive import _attack_email, attack_rounds, best_payload
+
+        attacker = OpenRouterPlanner(settings.openrouter_api_key, settings.model_name)
+        cases = []
+        for goal in _limited(list(Goal), args.limit):
+            rounds = attack_rounds(goal, planner, attacker, rounds=args.rounds,
+                                   budget=planner.budget)
+            body = best_payload(rounds) or (rounds[-1]["body"] if rounds else "")
+            cases.append((goal, _attack_email(len(cases)), body))
+        rows = (run_all(cases, planner, out, ablation=args.ablation,
+                        source="adaptive", split=args.split) if cases else [])
+    else:
+        attack_cases, control_cases = load_cases(args.source, args.split)
+        attack_cases = _limited(attack_cases, args.limit)
+        control_cases = _limited(control_cases, args.limit)
+
+        # Each call writes `out` on its own; the combined write below is what
+        # actually lands, so this order-of-writes is harmless, not a race.
+        attack_rows = (run_all(attack_cases, planner, out, ablation=args.ablation,
+                               source=args.source, split=args.split)
+                      if attack_cases else [])
+        control_rows = (run_all(control_cases, planner, out, ablation=args.ablation,
+                                source=f"{args.source}-control", split=args.split)
+                        if control_cases else [])
+        rows = attack_rows + control_rows
+        if rows:
+            _write_csv(rows, out)
+
+    print(summarise(rows))
+
+
+if __name__ == "__main__":
+    main()

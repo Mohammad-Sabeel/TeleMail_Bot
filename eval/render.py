@@ -205,6 +205,31 @@ def performance_section() -> str | None:
     return "\n".join(lines) + "\n"
 
 
+GOAL_RESULTS = Path("data/goal_results.csv")
+
+
+def goals_section() -> str | None:
+    if not GOAL_RESULTS.is_file():
+        return None
+    import csv
+    rows = list(csv.DictReader(GOAL_RESULTS.open()))
+    if not rows:
+        return None
+    from eval.metrics import wilson
+    lines = ["| goal | arm | won | n | rate | 95% CI |", "|---|---|---|---|---|---|"]
+    for goal in sorted({r["goal"] for r in rows}):
+        for arm in ("naive", "mediated"):
+            subset = [r for r in rows if r["goal"] == goal and r["arm"] == arm]
+            if not subset:
+                continue
+            won = sum(r["won"] == "True" for r in subset)
+            low, high = wilson(won, len(subset))
+            lines.append(f"| {goal} | {arm} | {won} | {len(subset)} | "
+                         f"{100 * won / len(subset):.1f}% | "
+                         f"[{100 * low:.1f}, {100 * high:.1f}] |")
+    return "\n".join(lines) + "\n"
+
+
 def owasp_section() -> str | None:
     """Lifted from BUILD_PLAN.md so the mapping has one source, not two."""
     plan = Path("docs/BUILD_PLAN.md")
@@ -226,6 +251,8 @@ def main():
                   "not yet run: python -m eval.triage_metrics"))
     print(section("RQ2 — Attack resistance", attack_section(),
                   "not yet run: python -m eval.run_attacks [--delimiters static]"))
+    print(section("Stage 1 — attacker goals", goals_section(),
+                  "not yet run: python -m eval.run_goals"))
     print(section("T11 — Forged authentication headers", t11_section(),
                   "not yet run: python -m eval.t11_headers"))
     print(section("T10 — Cross-batch contamination", cross_batch_section(),

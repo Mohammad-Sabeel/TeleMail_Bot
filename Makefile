@@ -40,6 +40,8 @@ evaluate:
 	$(PY) -m eval.triage_metrics
 	$(PY) -m eval.run_attacks --delimiters static
 	$(PY) -m eval.run_attacks
+	$(PY) -m eval.run_goals --source llmail --split dev
+	$(PY) -m eval.run_goals --source adaptive --split dev
 	$(PY) -m eval.cross_batch
 	$(PY) -m eval.phishing_clf
 	$(PY) -m eval.injection_clf
