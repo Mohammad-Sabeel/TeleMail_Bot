@@ -1,0 +1,4 @@
+variant,neighbours,contaminated,noise,self_changed,batched_vs_alone_changed
+1,7,1,0,True,False
+2,7,2,2,True,False
+3,7,2,2,True,False

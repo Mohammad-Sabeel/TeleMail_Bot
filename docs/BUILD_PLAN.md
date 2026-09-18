@@ -679,6 +679,17 @@ nothing is marked covered on the strength of a prompt instruction alone.
 | **LLM09 Misinformation** | A planted email can make an answer confidently wrong | Warnings computed by code from the cited emails; sources always listed | `telemail/bot.py` `format_answer`, `warning_reason` | Warnings are heuristic; untrusted answers are not marked as such → **Stage 2** |
 | **LLM10 Unbounded consumption** | Each `/sync` reads and assesses every new email at the provider's per-token price; a flood of mail, or a loop, spends real money | `max_tokens` capped per call; reads limited to non-bulk mail; VirusTotal capped at 8/sync and 400/day | `telemail/triage/planner.py`, `telemail/threatintel.py` | No daily spend cap on the model, and no cap on emails read per sync → small task in **Stage 1** |
 
+**Stage 1 first run (2026-09-18, 66 cases, 223k tokens).** Held-out LLMail-Inject (30 attack,
+12 control), the project's own fixtures (18 attack) and an adaptive attacker (6 goals x 2 rounds).
+Result: secret disclosure into the chat channel succeeded 14/14 against the naive arm and 0/14
+against the mediated arm (Fisher exact one-sided p = 2.5e-08). Every other goal scored 0/n in BOTH
+arms, so this run separates the arms on exactly one axis and says nothing yet about the other five.
+
+State it precisely: the G3 question asks for the user's own code, so the disclosure is
+question-triggered and the win is attributable to output-edge redaction, not to the broker refusing
+an attacker's instruction — control cases with no attacker present leak identically. The attacks
+that remain unsuccessful in both arms are evidence about the attacks, not proof of safety.
+
 **Stage 1 freeze (2026-09-18):** goals G1–G6, graders in `eval/graders.py`, and the
 LLMail-Inject sample in `data/fixtures_llmail/` are frozen. `--split dev` is used while
 building Stage 2; `--split test` is run once, at the end of Stage 2, and never tuned against.
