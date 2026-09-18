@@ -57,7 +57,8 @@ def build_app(db_path: str | None = None) -> App:
     planner = OpenRouterPlanner(s.openrouter_api_key, s.model_name)
 
     app = App(db=db, adapter=adapter,
-              sync=SyncEngine(db, adapter, own_address=own),
+              sync=SyncEngine(db, adapter, own_address=own,
+                              retention_days=s.retention_days),
               broker=broker, planner=planner,
               policy=AlertPolicy(),
               prefilter_cfg=PrefilterConfig(),
@@ -68,6 +69,7 @@ def build_app(db_path: str | None = None) -> App:
     app.bot.sync_fn = app.sync.poll
     app.bot.triage_fn = lambda: triage_all(app)
     app.bot.reports_dir = Path("data/reports")
+    app.bot.retention_days = s.retention_days
     return app
 
 

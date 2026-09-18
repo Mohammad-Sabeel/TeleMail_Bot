@@ -30,7 +30,8 @@ from pathlib import Path
 
 from telemail.redact import redact
 from telemail.models import Email, TriageResult
-from telemail.report import ReportEntry, build_report, caption, render_pdf
+from telemail.report import (ReportEntry, build_report, caption, purge_reports,
+                             render_pdf)
 from telemail.triage.assess import assess_email
 from telemail.triage.converse import (answer_from_bodies, answer_from_snippets,
                                       interpret, retrieve)
@@ -378,6 +379,7 @@ class TeleMailBot:
         # Set by the composition root; None disables the reading/report stage
         # (bots built without it, e.g. in tests, never read mail).
         self.reports_dir: Path | None = None
+        self.retention_days = 3      # matches Settings.retention_days
         # Conversation memory: the user's messages and the bot's answers only —
         # never retrieved email text, so an email cannot steer later turns.
         self.memory: deque[tuple[str, str]] = deque(maxlen=10)
@@ -743,6 +745,13 @@ class TeleMailBot:
                 return
 
             notes = []
+            dropped = (purge_reports(self.reports_dir,
+                                     self.now() - timedelta(days=self.retention_days))
+                       if self.reports_dir is not None else 0)
+            if getattr(stats, "purged", 0) or dropped:
+                notes.append(f"Retention: cleared {stats.purged} email preview(s) and "
+                             f"{dropped} old report(s) older than "
+                             f"{self.retention_days} days.")
             if stats.errors:
                 notes.append(f"{len(stats.errors)} email(s) could not be fetched; "
                              f"the next /sync retries them.")
