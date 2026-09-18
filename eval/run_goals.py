@@ -1,12 +1,14 @@
 """Every goal, every arm, one row each.
 
 The model is called ONCE per case, in `model_pass`: one `propose`, one
-`ask_json`, one `triage` over the whole mailbox, one deterministic `retrieve`.
-Both arms consume the SAME `produced` dict, so a difference between arms can
-only come from `run_arm`'s dispatch and output handling — never from a second,
-independently-sampled model call. `run_arm(scenario, arm, produced)` takes no
-planner argument at all, which makes that invariant structural rather than a
-promise a caller could break by accident.
+`answer_from_bodies` (the production answer path, with the emails actually in
+the prompt — see the note on `model_pass` below), one `triage` over the whole
+mailbox, one deterministic `retrieve`. Both arms consume the SAME `produced`
+dict, so a difference between arms can only come from `run_arm`'s dispatch and
+output handling — never from a second, independently-sampled model call.
+`run_arm(scenario, arm, produced)` takes no planner argument at all, which
+makes that invariant structural rather than a promise a caller could break by
+accident.
 
 "mediated" runs the real pipeline: broker dispatch, and a mediated answer built
 from the SAME triage results and the SAME deterministic rules layer
@@ -48,7 +50,7 @@ from telemail.models import Email
 from telemail.redact import redact
 from telemail.threatintel import VirusTotal, domains_from
 from telemail.triage.assess import deterministic_evidence
-from telemail.triage.converse import retrieve
+from telemail.triage.converse import answer_from_bodies, retrieve
 from telemail.triage.planner import OpenRouterPlanner
 
 FIXTURES_LLMAIL = Path("data/fixtures_llmail")
@@ -84,12 +86,31 @@ def _rules_level(email: Email, body: str, indicators, vt_reports) -> str:
 
 def model_pass(scenario: Scenario, planner) -> dict:
     """Everything the model produces for one case: one proposal, one answer,
-    one ranking, one triage pass. Both arms are built from this, unchanged."""
+    one ranking, one triage pass. Both arms are built from this, unchanged.
+
+    The answer comes from `answer_from_bodies` — the same production path
+    Feature D uses — not a bare `ask_json("answer", question)` call. That
+    function is what builds the nonce-delimited, untrusted-marked prompt with
+    the emails actually in it; without it the model never saw the attack text
+    and every answer came back empty, making G2/G3/G6 structurally unwinnable
+    in both arms."""
     proposal = planner.propose(scenario.question,
                                [{"sender": e.sender_email, "subject": e.subject,
                                  "body": scenario.bodies[e.message_id]}
                                 for e in scenario.mailbox])
-    reply = planner.ask_json("answer", scenario.question)
+    reads = [(i, email, scenario.bodies[email.message_id])
+            for i, email in enumerate(scenario.mailbox, 1)]
+    body_answer = answer_from_bodies(planner, scenario.question, [], reads)
+    if body_answer is None:
+        # A model failure (invalid JSON, a validation error) must not crash
+        # the run — it must show up as an empty, ungradeable answer in the
+        # CSV, not be silently treated as a win or a loss.
+        reply = {"answer": "", "message_ids": []}
+    else:
+        by_index = {i: email.message_id for i, email, _ in reads}
+        reply = {"answer": body_answer.answer,
+                "message_ids": [by_index[i] for i in body_answer.cited_ids
+                                if i in by_index]}
     ranked_ids = [e.message_id for e in retrieve(scenario.question, scenario.mailbox)]
     triage = {v.message_id: v for v in planner.triage(scenario.mailbox)}
     return {"proposal": proposal, "reply": reply, "ranked_ids": ranked_ids,
