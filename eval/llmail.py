@@ -14,8 +14,14 @@ import json
 import random
 import re
 from collections import defaultdict
+from email import policy
 from email.message import EmailMessage
 from pathlib import Path
+
+# Headers never fold: a folded X-TeleMail-Objectives breaks json.loads for a
+# bare `email.message_from_bytes` parser (RFC-2822 folding inserts a literal
+# newline inside the JSON string).
+_NO_WRAP = policy.default.clone(max_line_length=None)
 
 DATASET_URL = ("https://huggingface.co/datasets/microsoft/llmail-inject-challenge/"
                "resolve/main/data/labelled_unique_submissions_phase2.json")
@@ -83,36 +89,60 @@ def split_for(index: int) -> str:
     return "dev" if index % 2 == 0 else "test"
 
 
-def to_eml(record: dict, index: int) -> bytes:
-    msg = EmailMessage()
+# Only these three outcome fields are worth a header: judge_answer is a
+# paragraph of judge reasoning we never use, and its length is what pushed
+# the header past RFC-2822's fold threshold.
+_OBJECTIVE_KEYS = ("attack_attempt", "reason", "judge_category")
+_ATTACK_ATTEMPT_TRUE = (True, "True")
+_ATTACK_ATTEMPT_FALSE = (False, "False")
+
+
+def arm_for(record: dict) -> str:
+    """The dataset's own attack_attempt label, not an assumption we write in."""
+    value = (record.get("objectives") or {}).get("attack_attempt")
+    if value in _ATTACK_ATTEMPT_TRUE:
+        return "attack"
+    if value in _ATTACK_ATTEMPT_FALSE:
+        return "control"
+    return "unclear"
+
+
+def to_eml(record: dict, index: int, split: str | None = None) -> bytes:
+    msg = EmailMessage(policy=_NO_WRAP)
     msg["Subject"] = str(record.get("subject") or "(no subject)")
     msg["From"] = "Attacker <attacker@llmail.invalid>"
     msg["To"] = "you@example.invalid"
     msg["X-TeleMail-Technique"] = "LLMAIL"
     msg["X-TeleMail-Variant"] = str(index)
-    msg["X-TeleMail-Arm"] = "attack"
+    msg["X-TeleMail-Arm"] = arm_for(record)
     msg["X-TeleMail-Source"] = "llmail-inject"
     msg["X-TeleMail-Level"] = str(record.get("level", "unknown"))
-    msg["X-TeleMail-Split"] = split_for(index)
-    if "objectives" in record:
-        msg["X-TeleMail-Objectives"] = json.dumps(record["objectives"])
+    msg["X-TeleMail-Split"] = split if split is not None else split_for(index)
+    objectives = record.get("objectives")
+    if objectives:
+        trimmed = {k: objectives[k] for k in _OBJECTIVE_KEYS if k in objectives}
+        msg["X-TeleMail-Objectives"] = json.dumps(trimmed, separators=(",", ":"))
     msg.set_content(str(record.get("body") or ""))
     return msg.as_bytes()
 
 
 def write_fixtures(records: list[dict], out_dir: Path) -> Path:
+    """Split dev/test within each level so category mix can't skew the split."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
+    position_in_level = defaultdict(int)
     for index, record in enumerate(records):
+        level = str(record.get("level", "unknown"))
+        split = split_for(position_in_level[level])
+        position_in_level[level] += 1
         name = f"LLMAIL_{index:03d}.eml"
-        (out_dir / name).write_bytes(to_eml(record, index))
-        rows.append({"file": name, "source": "llmail-inject",
-                     "level": str(record.get("level", "unknown")),
-                     "split": split_for(index)})
+        (out_dir / name).write_bytes(to_eml(record, index, split=split))
+        rows.append({"file": name, "source": "llmail-inject", "level": level,
+                     "split": split, "arm": arm_for(record)})
     manifest = out_dir / "manifest.csv"
     with manifest.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["file", "source", "level", "split"])
+        writer = csv.DictWriter(fh, fieldnames=["file", "source", "level", "split", "arm"])
         writer.writeheader()
         writer.writerows(rows)
     return manifest
