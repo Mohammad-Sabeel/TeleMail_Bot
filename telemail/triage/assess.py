@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from telemail.indicators import match_indicators
 from telemail.models import Email
 from telemail.triage.planner import signals_line, strip_delimiters
 
@@ -76,9 +77,29 @@ def link_evidence(links: list[dict]) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def deterministic_evidence(email: Email, read: dict | None) -> tuple[Level, list[str]]:
+def indicator_evidence(email: Email, read: dict | None,
+                       indicators: list[str]) -> list[str]:
+    """User-maintained signatures. Exact substring hits over everything we hold
+    for the email: sender, subject, preview, body and link targets."""
+    if not indicators:
+        return []
+    parts = [email.sender_email, email.sender_name, email.subject, email.snippet]
+    if read:
+        parts.append(read.get("body", ""))
+        parts += [l.get("href", "") for l in read.get("links", [])]
+        parts += list(read.get("attachments", []))
+    hits = match_indicators(" \n".join(p for p in parts if p), indicators)
+    return [f"matches indicator: {h}" for h in hits]
+
+
+def deterministic_evidence(email: Email, read: dict | None,
+                           indicators: list[str] = ()) -> tuple[Level, list[str]]:
     s = email.signals
     level, evidence = Level.NONE, []
+    hits = indicator_evidence(email, read, list(indicators))
+    if hits:
+        level = Level.THREAT
+        evidence += hits
     fails = [k.upper() for k in ("spf", "dkim", "dmarc") if getattr(s, k) == "fail"]
     if len(fails) >= 2:
         level = Level.THREAT
@@ -197,12 +218,13 @@ def combine_verdict(det_level: Level, det_evidence: list[str],
                    model_assessed=model is not None)
 
 
-def assess_email(email: Email, triage, read: dict | None, planner) -> Verdict:
+def assess_email(email: Email, triage, read: dict | None, planner,
+                 indicators: list[str] = ()) -> Verdict:
     suspicious = bool(triage and triage.category == "suspicious")
     if read is None:
-        det_level, evidence = deterministic_evidence(email, None)
+        det_level, evidence = deterministic_evidence(email, None, indicators)
         return combine_verdict(max(det_level, Level.CAUTION),
                                evidence + ["body could not be read"], None, suspicious)
-    det_level, evidence = deterministic_evidence(email, read)
+    det_level, evidence = deterministic_evidence(email, read, indicators)
     model = assess_model(planner, email, read.get("body", ""))
     return combine_verdict(det_level, evidence, model, suspicious)
