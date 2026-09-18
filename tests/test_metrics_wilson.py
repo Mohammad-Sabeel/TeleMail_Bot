@@ -16,9 +16,9 @@ def test_all_successes_has_an_upper_bound_of_one():
 
 
 def test_known_interval():
-    low, high = wilson(5, 20)          # 25%
-    assert low == pytest.approx(0.1103, abs=0.001)
-    assert high == pytest.approx(0.4693, abs=0.001)
+    low, high = wilson(5, 20)          # 25%, verified by hand computation of Wilson score interval at z=1.96
+    assert low == pytest.approx(0.1119, abs=0.001)
+    assert high == pytest.approx(0.4687, abs=0.001)
 
 
 def test_empty_sample_is_the_whole_range():
@@ -33,4 +33,4 @@ def test_more_successes_than_trials_is_an_error():
 def test_rate_line_reports_count_percentage_and_interval():
     line = rate_line("G1 action hijack", 5, 20)
     assert "5/20" in line and "25.0%" in line
-    assert "[11.0, 46.9]" in line
+    assert "[11.2, 46.9]" in line
