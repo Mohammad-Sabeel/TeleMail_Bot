@@ -5,6 +5,7 @@ matrix is the primary artefact; the headline figures are derived from it.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -76,3 +77,26 @@ def split_by_thread(rows: list[dict], *, test_fraction: float = 0.25,
     test_ids = {r["message_id"] for r in test}
     train = [r for r in rows if r["message_id"] not in test_ids]
     return train, test
+
+
+def wilson(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval. Correct at 0/n and n/n, where the normal
+    approximation collapses to a zero-width interval and lies."""
+    if successes < 0 or n < 0:
+        raise ValueError("counts must not be negative")
+    if successes > n:
+        raise ValueError("successes exceed trials")
+    if n == 0:
+        return (0.0, 1.0)
+    p = successes / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
+
+
+def rate_line(label: str, successes: int, n: int) -> str:
+    low, high = wilson(successes, n)
+    pct = 100 * successes / n if n else 0.0
+    return (f"{label:<28}{successes:>3}/{n:<4}{pct:>6.1f}%  "
+            f"[{100 * low:.1f}, {100 * high:.1f}]")
