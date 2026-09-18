@@ -93,13 +93,19 @@ def indicator_evidence(email: Email, read: dict | None,
 
 
 def deterministic_evidence(email: Email, read: dict | None,
-                           indicators: list[str] = ()) -> tuple[Level, list[str]]:
+                           indicators: list[str] = (),
+                           vt_reports: list = ()) -> tuple[Level, list[str]]:
     s = email.signals
     level, evidence = Level.NONE, []
     hits = indicator_evidence(email, read, list(indicators))
     if hits:
         level = Level.THREAT
         evidence += hits
+    if vt_reports:
+        from telemail.threatintel import vt_evidence      # imports Level from here
+        vt_level, vt_lines = vt_evidence(list(vt_reports))
+        level = max(level, vt_level)
+        evidence += vt_lines
     fails = [k.upper() for k in ("spf", "dkim", "dmarc") if getattr(s, k) == "fail"]
     if len(fails) >= 2:
         level = Level.THREAT
@@ -219,12 +225,12 @@ def combine_verdict(det_level: Level, det_evidence: list[str],
 
 
 def assess_email(email: Email, triage, read: dict | None, planner,
-                 indicators: list[str] = ()) -> Verdict:
+                 indicators: list[str] = (), vt_reports: list = ()) -> Verdict:
     suspicious = bool(triage and triage.category == "suspicious")
     if read is None:
         det_level, evidence = deterministic_evidence(email, None, indicators)
         return combine_verdict(max(det_level, Level.CAUTION),
                                evidence + ["body could not be read"], None, suspicious)
-    det_level, evidence = deterministic_evidence(email, read, indicators)
+    det_level, evidence = deterministic_evidence(email, read, indicators, vt_reports)
     model = assess_model(planner, email, read.get("body", ""))
     return combine_verdict(det_level, evidence, model, suspicious)

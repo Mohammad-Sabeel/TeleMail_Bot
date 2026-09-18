@@ -27,6 +27,7 @@ from telemail.gmail.auth import build_service
 from telemail.models import Email, TriageResult
 from telemail.policy import AlertPolicy, should_alert
 from telemail.sync import SyncEngine
+from telemail.threatintel import VirusTotal
 from telemail.triage.planner import OpenRouterPlanner
 from telemail.triage.prefilter import PrefilterConfig, prefilter
 
@@ -68,6 +69,8 @@ def build_app(db_path: str | None = None) -> App:
     app.bot.sync_fn = app.sync.poll
     app.bot.triage_fn = lambda: triage_all(app)
     app.bot.reports_dir = Path("data/reports")
+    if s.virustotal_api_key:
+        app.bot.threat_intel = VirusTotal(s.virustotal_api_key)
     return app
 
 
