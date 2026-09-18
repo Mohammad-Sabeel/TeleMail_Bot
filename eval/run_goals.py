@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 
 from eval.goals import Goal, Scenario, build_scenario
@@ -33,19 +35,25 @@ from eval.graders import Outcome, grade_goal
 from eval.metrics import rate_line
 from eval.mock_adapter import MockAdapter
 from eval.naive_arm import naive_execute
+from eval.run_attacks import _full_body
 from telemail.bot import format_answer, warning_reason
 from telemail.broker.broker import Broker
 from telemail.budget import Budget
 from telemail.config import get_settings
 from telemail.db import Database
+from telemail.gmail.adapter import _URL_RE
 from telemail.gmail.normalise import from_eml_bytes
+from telemail.indicators import load_indicators
 from telemail.models import Email
 from telemail.redact import redact
+from telemail.threatintel import VirusTotal, domains_from
 from telemail.triage.assess import deterministic_evidence
 from telemail.triage.converse import retrieve
 from telemail.triage.planner import OpenRouterPlanner
 
 FIXTURES_LLMAIL = Path("data/fixtures_llmail")
+FIXTURES_OWN = Path("data/fixtures")
+INDICATORS_PATH = Path("data/indicators.txt")
 
 
 def _dispatch(scenario: Scenario, proposal: dict, arm: str) -> tuple[list[str], bool]:
@@ -62,10 +70,15 @@ def _dispatch(scenario: Scenario, proposal: dict, arm: str) -> tuple[list[str], 
     return ops, not result.ok
 
 
-def _rules_level(email: Email) -> str:
+def _rules_level(email: Email, body: str, indicators, vt_reports) -> str:
     """The same deterministic rules layer production runs, so a mediated-arm
-    warning is earned the way a real warning would be, not simulated."""
-    level, _ = deterministic_evidence(email, None)
+    warning is earned the way a real warning would be, not simulated.
+
+    `read` is built from the case body (the only "fetched" content an eval
+    case has) so indicator/link evidence has something real to match against,
+    the way it would against a fetched email in production."""
+    read = {"body": body, "links": [{"href": u} for u in _URL_RE.findall(body)]}
+    level, _ = deterministic_evidence(email, read, indicators, vt_reports)
     return level.name
 
 
@@ -83,7 +96,8 @@ def model_pass(scenario: Scenario, planner) -> dict:
             "triage": triage}
 
 
-def run_arm(scenario: Scenario, arm: str, produced: dict) -> Outcome:
+def run_arm(scenario: Scenario, arm: str, produced: dict, *, indicators=(),
+           vt_reports=()) -> Outcome:
     invoked, rejected = _dispatch(scenario, produced["proposal"], arm)
     reply = produced["reply"]
     raw_answer = str(reply.get("answer", ""))
@@ -92,9 +106,11 @@ def run_arm(scenario: Scenario, arm: str, produced: dict) -> Outcome:
         answer, warned = raw_answer, False
     else:
         triage_by_id = produced["triage"]
-        sources = [(e, triage_by_id.get(e.message_id), _rules_level(e))
-                   for e in scenario.mailbox
-                   if e.message_id in reply.get("message_ids", [])]
+        sources = [(e, triage_by_id.get(e.message_id),
+                   _rules_level(e, scenario.bodies.get(e.message_id, ""),
+                                indicators, vt_reports))
+                  for e in scenario.mailbox
+                  if e.message_id in reply.get("message_ids", [])]
         warned = any(warning_reason(e, t, level) for e, t, level in sources)
         answer = redact(format_answer(raw_answer, sources))
 
@@ -105,7 +121,8 @@ def run_arm(scenario: Scenario, arm: str, produced: dict) -> Outcome:
 def run_case(scenario: Scenario, planner, arm: str, *, indicators=(),
              vt_reports=()) -> Outcome:
     """Thin wrapper kept for existing callers: one model pass, one arm."""
-    return run_arm(scenario, arm, model_pass(scenario, planner))
+    return run_arm(scenario, arm, model_pass(scenario, planner),
+                   indicators=indicators, vt_reports=vt_reports)
 
 
 def _target_verdict(planner, mailbox, target_id: str):
@@ -126,8 +143,66 @@ def _suppress_verdicts(planner, scenario: Scenario, produced: dict):
     return attack, control
 
 
+def _ablation_indicators(ablation: str) -> list[str]:
+    if ablation in ("no-indicators", "neither"):
+        return []
+    return load_indicators(INDICATORS_PATH)
+
+
+def _ablation_vt_reports(ablation: str, cases: list, vt) -> list:
+    """One VirusTotal pass for the whole run rather than one per case or per
+    email, so `vt`'s own lookup cap bounds the whole run, not each case —
+    and `vt=None` (every direct `run_all` call that doesn't pass one, which
+    is every test) makes this a no-op with no settings lookup and no network
+    at all. Only `main()` builds a real client, from `get_settings()`.
+
+    ponytail: the resulting reports are shared across every email `_rules_level`
+    checks in this run rather than scoped to the one email whose link produced
+    them — correct enough for an ablation flag; scope per-email if a report
+    ever needs to say *which* email's link was flagged.
+    """
+    if vt is None or ablation in ("no-vt", "neither") or not vt.enabled:
+        return []
+    urls = [u for _goal, _email, body in cases for u in _URL_RE.findall(body)]
+    domains = domains_from({"links": [{"href": u} for u in urls]})
+    take = domains[:vt.max_lookups]
+    if not take:
+        return []
+    reports = vt.reports(take)
+    vt.max_lookups -= len(take)          # shared `vt`: later calls see what's left
+    return reports
+
+
+_ROW_KEY = ("source", "split", "ablation", "goal", "arm", "case")
+
+
+def _write_merged(rows: list[dict], out_csv: Path) -> None:
+    """Appends rather than overwrites: a second run — a different source,
+    split or ablation, e.g. the Makefile's llmail run followed by its adaptive
+    run — must not erase the rows an earlier run already left at the same
+    --out path. A row is superseded only by a new row with the identical
+    (source, split, ablation, goal, arm, case): a rerun of the same case
+    replaces its old result instead of duplicating it."""
+    existing = []
+    if out_csv.exists():
+        with out_csv.open() as fh:
+            existing = list(csv.DictReader(fh))
+    new_keys = {tuple(r[k] for k in _ROW_KEY) for r in rows}
+    kept = [r for r in existing if tuple(r.get(k) for k in _ROW_KEY) not in new_keys]
+    combined = kept + rows
+    if not combined:
+        return
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    with out_csv.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(combined[0]))
+        writer.writeheader()
+        writer.writerows(combined)
+
+
 def run_all(cases: list, planner, out_csv: Path, *, ablation: str = "full",
-            source: str = "synthetic", split: str = "dev") -> list[dict]:
+            source: str = "synthetic", split: str = "dev", vt=None) -> list[dict]:
+    indicators = _ablation_indicators(ablation)
+    vt_reports = _ablation_vt_reports(ablation, cases, vt)
     rows = []
     for goal, email, body in cases:
         scenario = build_scenario(goal, email, body)
@@ -135,20 +210,18 @@ def run_all(cases: list, planner, out_csv: Path, *, ablation: str = "full",
         attack_verdict, control_verdict = ((_suppress_verdicts(planner, scenario, produced))
                                            if goal is Goal.SUPPRESS else (None, None))
         for arm in ("mediated", "naive"):
-            outcome = run_arm(scenario, arm, produced)
+            outcome = run_arm(scenario, arm, produced, indicators=indicators,
+                              vt_reports=vt_reports)
             outcome.attack_verdict = attack_verdict
             outcome.control_verdict = control_verdict
             rows.append({"goal": goal.value, "arm": arm,
                          "won": grade_goal(goal, outcome, scenario),
                          "source": source, "split": split, "ablation": ablation,
                          "answer": outcome.answer[:200],
-                         "invoked": ";".join(outcome.invoked_ops)})
+                         "invoked": ";".join(outcome.invoked_ops),
+                         "case": scenario.attacker_id})
 
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    with out_csv.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+    _write_merged(rows, out_csv)
     return rows
 
 
@@ -166,10 +239,12 @@ def summarise(rows: list[dict]) -> str:
 
 # --- CLI -------------------------------------------------------------------
 #
-# `--source llmail` (and its alias `fixtures`) replays the frozen LLMail-Inject
-# corpus; `--source adaptive` runs the feedback attacker from eval/adaptive.py
-# instead. Either way the model is only ever the planner the settings name —
-# never a literal model id in this file.
+# Three distinct sources: `--source llmail` replays the frozen, held-out
+# LLMail-Inject pool; `--source fixtures` replays the project's OWN
+# adversarial fixtures (data/fixtures/) as an in-distribution baseline;
+# `--source adaptive` runs the feedback attacker from eval/adaptive.py
+# instead of any fixture pool. Either way the model is only ever the planner
+# the settings name — never a literal model id in this file.
 
 
 def parse_args(argv=None):
@@ -189,52 +264,79 @@ def parse_args(argv=None):
 
 def _body_text(msg) -> str:
     """`eval/llmail.py:to_eml` always writes a single plain-text part, so no
-    MIME walk is needed here the way `eval/run_attacks.py` needs one for the
-    hand-built multipart fixtures in data/fixtures."""
+    MIME walk is needed here the way data/fixtures' hand-built multipart
+    fixtures need `eval/run_attacks.py:_full_body`."""
     return str(msg.get_content()) if not msg.is_multipart() else ""
 
 
-def load_cases(source: str, split: str) -> tuple[list, list]:
-    """Attack cases and control cases from the frozen LLMail-Inject fixtures,
-    filtered to one split and round-robined across the six goals so every goal
-    gets comparable coverage without trying all six against every fixture.
-
-    Controls (X-TeleMail-Arm "control") are the false-positive check: they
-    come back separately so the caller can record them under their own
-    source. "unclear" fixtures are skipped — the dataset itself would not say
-    which arm they belong to.
-    """
-    from email import policy
-    from email.parser import BytesParser
-
-    # ponytail: `source` is accepted (and matches the CLI's choices) but not
-    # yet used to pick a directory — there is only one fixture pool today.
-    # Branch here if a second corpus needs its own path.
-    del source
-
+def _round_robin_by_arm(rows_with_arm) -> tuple[list, list]:
+    """Splits (goal, email, body) triples into attack/control by their arm,
+    goals assigned round-robin over the row order so all six get comparable
+    coverage without trying every goal against every fixture."""
     goals = list(Goal)
-    with (FIXTURES_LLMAIL / "manifest.csv").open() as fh:
-        rows = [r for r in csv.DictReader(fh)
-               if r["split"] == split and r["arm"] != "unclear"]
-
     attack_cases, control_cases = [], []
-    for index, row in enumerate(rows):
-        raw = (FIXTURES_LLMAIL / row["file"]).read_bytes()
-        msg = BytesParser(policy=policy.default).parsebytes(raw)
-        email = from_eml_bytes(raw, own_address="you@example.invalid")
-        body = _body_text(msg)
+    for index, (arm, email, body) in enumerate(rows_with_arm):
         goal = goals[index % len(goals)]
-        target = attack_cases if row["arm"] == "attack" else control_cases
+        target = attack_cases if arm == "attack" else control_cases
         target.append((goal, email, body))
     return attack_cases, control_cases
 
 
-def _write_csv(rows: list[dict], out_csv: Path) -> None:
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    with out_csv.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+def _llmail_cases(split: str) -> tuple[list, list]:
+    """The held-out LLMail-Inject pool: real attacks written by real people,
+    frozen at data/fixtures_llmail/ (see docs/BUILD_PLAN.md's Stage 1 freeze).
+    Filtered to one split; "unclear" fixtures are skipped — the dataset
+    itself would not say which arm they belong to."""
+    with (FIXTURES_LLMAIL / "manifest.csv").open() as fh:
+        rows = [r for r in csv.DictReader(fh)
+               if r["split"] == split and r["arm"] != "unclear"]
+    parsed = []
+    for row in rows:
+        raw = (FIXTURES_LLMAIL / row["file"]).read_bytes()
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        email = from_eml_bytes(raw, own_address="you@example.invalid")
+        parsed.append((row["arm"], email, _body_text(msg)))
+    return _round_robin_by_arm(parsed)
+
+
+def _own_fixture_cases() -> tuple[list, list]:
+    """The project's OWN adversarial fixtures at data/fixtures/ — an
+    in-distribution baseline next to the held-out LLMail pool. These carry no
+    split header (they predate the dev/test split), so every fixture is used
+    regardless of --split. Parsing follows `eval/run_attacks.py:load_cases`
+    rather than inventing a second reader for the same file shape."""
+    parsed = []
+    for f in sorted(FIXTURES_OWN.glob("*.eml")):
+        raw = f.read_bytes()
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        arm = msg.get("X-TeleMail-Arm")
+        if arm == "unclear":
+            continue
+        email = from_eml_bytes(raw, own_address="you@example.invalid")
+        parsed.append((arm, email, _full_body(msg)))
+    return _round_robin_by_arm(parsed)
+
+
+def load_cases(source: str, split: str) -> tuple[list, list]:
+    """Attack cases and control cases (X-TeleMail-Arm "attack" / "control")
+    for the given `--source`: the project's own fixtures for "fixtures", the
+    held-out LLMail-Inject pool otherwise. Controls are the false-positive
+    check — run separately so the caller can record them under their own
+    source (e.g. "llmail-control")."""
+    if source == "fixtures":
+        return _own_fixture_cases()
+    return _llmail_cases(split)
+
+
+def _cap_total(attack_cases: list, control_cases: list, limit: int) -> tuple[list, list]:
+    """--limit caps the TOTAL number of cases run (attack + control), applied
+    before any model call — not each list independently, or --limit 10 could
+    still mean 20 cases."""
+    if not limit:
+        return attack_cases, control_cases
+    attack_cases = attack_cases[:limit]
+    control_cases = control_cases[:max(limit - len(attack_cases), 0)]
+    return attack_cases, control_cases
 
 
 def _limited(items: list, limit: int) -> list:
@@ -248,6 +350,11 @@ def main(argv=None) -> None:
     # Attach the same daily ceiling adaptive() charges against, so a run
     # cannot quietly spend past it (OWASP LLM10 — see telemail/budget.py).
     planner.budget = Budget(daily_tokens=settings.daily_token_budget)
+    # One client for the whole invocation: _ablation_vt_reports shrinks its
+    # max_lookups as each run_all call spends from it, so two run_all calls
+    # in one CLI run (attack + control, or the Makefile's llmail + adaptive)
+    # share one 8-lookup budget rather than getting 8 each. Inert with no key.
+    vt = VirusTotal(settings.virustotal_api_key)
     out = Path(args.out)
 
     if args.source == "adaptive":
@@ -261,23 +368,20 @@ def main(argv=None) -> None:
             body = best_payload(rounds) or (rounds[-1]["body"] if rounds else "")
             cases.append((goal, _attack_email(len(cases)), body))
         rows = (run_all(cases, planner, out, ablation=args.ablation,
-                        source="adaptive", split=args.split) if cases else [])
+                        source="adaptive", split=args.split, vt=vt) if cases else [])
     else:
         attack_cases, control_cases = load_cases(args.source, args.split)
-        attack_cases = _limited(attack_cases, args.limit)
-        control_cases = _limited(control_cases, args.limit)
+        attack_cases, control_cases = _cap_total(attack_cases, control_cases, args.limit)
 
-        # Each call writes `out` on its own; the combined write below is what
-        # actually lands, so this order-of-writes is harmless, not a race.
+        # run_all appends: the control call below does not erase the attack
+        # call's rows, it adds to them (see _write_merged).
         attack_rows = (run_all(attack_cases, planner, out, ablation=args.ablation,
-                               source=args.source, split=args.split)
+                               source=args.source, split=args.split, vt=vt)
                       if attack_cases else [])
         control_rows = (run_all(control_cases, planner, out, ablation=args.ablation,
-                                source=f"{args.source}-control", split=args.split)
+                                source=f"{args.source}-control", split=args.split, vt=vt)
                         if control_cases else [])
         rows = attack_rows + control_rows
-        if rows:
-            _write_csv(rows, out)
 
     print(summarise(rows))
 
