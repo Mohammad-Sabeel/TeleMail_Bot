@@ -280,6 +280,9 @@ def parse_args(argv=None):
     ap.add_argument("--out", default="data/goal_results.csv")
     ap.add_argument("--limit", type=int, default=0,
                     help="cap the number of cases processed; 0 means no limit")
+    ap.add_argument("--cases", choices=("both", "attack", "control"), default="both",
+                    help="which fixture arm to load; ignored by --source adaptive, "
+                         "which always generates its own payloads")
     return ap.parse_args(argv)
 
 
@@ -349,6 +352,17 @@ def load_cases(source: str, split: str) -> tuple[list, list]:
     return _llmail_cases(split)
 
 
+def _select_cases(attack_cases: list, control_cases: list, cases: str) -> tuple[list, list]:
+    """--cases lets a caller run only controls (or only attacks) without
+    paying for the other arm first — applied before --limit/_cap_total, so
+    `--cases control --limit 12` spends the whole limit on controls."""
+    if cases == "attack":
+        return attack_cases, []
+    if cases == "control":
+        return [], control_cases
+    return attack_cases, control_cases
+
+
 def _cap_total(attack_cases: list, control_cases: list, limit: int) -> tuple[list, list]:
     """--limit caps the TOTAL number of cases run (attack + control), applied
     before any model call — not each list independently, or --limit 10 could
@@ -392,6 +406,7 @@ def main(argv=None) -> None:
                         source="adaptive", split=args.split, vt=vt) if cases else [])
     else:
         attack_cases, control_cases = load_cases(args.source, args.split)
+        attack_cases, control_cases = _select_cases(attack_cases, control_cases, args.cases)
         attack_cases, control_cases = _cap_total(attack_cases, control_cases, args.limit)
 
         # run_all appends: the control call below does not erase the attack
