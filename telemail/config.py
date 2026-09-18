@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     guard_model_path: str = "data/prompt_guard"
     guard_threshold: float = 0.5
 
+    daily_token_budget: int = 300_000  # OWASP LLM10: a daily ceiling on model tokens
+    max_reads_per_sync: int = 40       # OWASP LLM10: a cap on emails read per /sync
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -103,6 +103,9 @@ ASK_EXPECTED = ("Which emails are you expecting today? Send keywords, comma- or 
 NEEDS_MODEL = ("/ask needs a model. Set OPENROUTER_API_KEY and MODEL_NAME in .env "
                "and restart.\n\nWorking now without one: /recent /urgent "
                "/suspicious /search /status")
+BUDGET_EXHAUSTED = ("Today's model budget is used up, so /ask can't run right now. "
+                    "It resets tomorrow.\n\nWorking now without one: /recent /urgent "
+                    "/suspicious /search /status")
 NO_ANSWER = ("I couldn't get a usable answer from the model right now. "
              "Slash commands still work.")
 CONFIRM_TTL = timedelta(minutes=5)
@@ -382,6 +385,8 @@ class TeleMailBot:
         # (bots built without it, e.g. in tests, never read mail).
         self.reports_dir: Path | None = None
         self.indicators_path = Path("data/indicators.txt")
+        self.max_reads_per_sync = 40   # OWASP LLM10: a flood of mail must not
+                                        # become an unbounded read/model bill
         self.threat_intel = None     # a VirusTotal client, when a key is set
         # Conversation memory: the user's messages and the bot's answers only —
         # never retrieved email text, so an email cannot steer later turns.
@@ -476,6 +481,9 @@ class TeleMailBot:
         return self.planner is not None and getattr(
             self.planner, "configured", bool(getattr(self.planner, "api_key", "x")))
 
+    def _budget_exhausted(self) -> bool:
+        return bool(getattr(getattr(self.planner, "budget", None), "exhausted", False))
+
     def _answer(self, question: str) -> tuple[str, list[Email], bool]:
         """Blocking (1–2 model calls, up to 3 Gmail reads): run via to_thread.
         Returns (answer, cited emails, whether the model answered)."""
@@ -509,6 +517,9 @@ class TeleMailBot:
     async def _handle_question(self, update, question: str) -> None:
         if not self._planner_ready():
             await update.message.reply_text(NEEDS_MODEL)
+            return
+        if self._budget_exhausted():
+            await update.message.reply_text(BUDGET_EXHAUSTED)
             return
         answer, cited, answered = await asyncio.to_thread(self._answer, question)
         sources = []
@@ -703,13 +714,17 @@ class TeleMailBot:
         t = self.db.get_triage(message_id)
         return bool(t and t.source == "prefilter" and t.category == "promotional")
 
+    def _reads_allowed(self, message_ids: list[str]) -> list[str]:
+        """OWASP LLM10: a flood of mail must not become an unbounded bill."""
+        return list(message_ids)[:self.max_reads_per_sync]
+
     def _read_and_assess(self, message_ids: list[str]
                          ) -> tuple[list[ReportEntry], list[tuple[str, str]]]:
         """Blocking (a Gmail read and a model call per email): run via to_thread.
         Bodies are read through the broker and discarded; only the verdict is stored."""
         entries, not_read = [], []
         indicators = load_indicators(self.indicators_path)
-        for mid in message_ids:
+        for mid in self._reads_allowed(message_ids):
             email, triage = self.db.get_email(mid), self.db.get_triage(mid)
             if email is None:
                 continue
@@ -787,6 +802,9 @@ class TeleMailBot:
             report = None
             if stats.inserted_ids and self.reports_dir is not None:
                 to_read = [i for i in stats.inserted_ids if not self._is_bulk(i)]
+                if len(stats.inserted_ids) > self.max_reads_per_sync:
+                    notes.append(f"Only the first {self.max_reads_per_sync} new emails were "
+                                 f"read for the report; run /sync again for the rest.")
                 await progress.edit_text(f"📖 Reading {len(to_read)} new email(s) "
                                          f"for the report…")
                 try:

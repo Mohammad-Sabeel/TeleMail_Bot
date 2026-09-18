@@ -25,6 +25,7 @@ from typing import Any, Protocol, get_args
 
 from pydantic import ValidationError
 
+from telemail.budget import BudgetExceeded
 from telemail.models import Email, TriageResult
 
 # No model is named in code. The model is an interchangeable component chosen by
@@ -228,13 +229,35 @@ class Planner(Protocol):
 
 
 class _BasePlanner:
-    """Shared retry-and-repair loop. Subclasses only implement `_complete`."""
+    """Shared retry-and-repair loop. Subclasses only implement `_post`.
+
+    `_complete` is the one path every caller (`ask_json`, `triage`, `propose`)
+    goes through to reach the network, so it is also the one place the daily
+    budget (OWASP LLM10) is checked and charged — not copy-pasted into each of
+    the three callers, which only translate a raised `BudgetExceeded` into
+    their own return shape, since a dict and a `list[TriageResult]` can't
+    share one error value.
+    """
 
     max_repairs = 1
     delimiter_mode = "nonce"      # "static" only for the T4 before/after measurement
+    budget = None                 # a telemail.budget.Budget, or None for no ceiling
 
-    def _complete(self, system: str, user: str) -> str:      # pragma: no cover
+    def _post(self, system: str, user: str) -> tuple[str, dict]:  # pragma: no cover
         raise NotImplementedError
+
+    def _charge(self, usage: dict) -> None:
+        if self.budget is not None:
+            self.budget.spend(usage.get("prompt_tokens", 0),
+                              usage.get("completion_tokens", 0))
+
+    def _complete(self, system: str, user: str) -> str:
+        if self.budget is not None and self.budget.exhausted:
+            raise BudgetExceeded("daily model budget reached")
+        content, usage = self._post(system, user)
+        if usage:
+            self._charge(usage)
+        return content if isinstance(content, str) else json.dumps(content)
 
     def drain_usage(self) -> list[dict]:
         """Token counts reported by the provider since the last drain. The
@@ -249,6 +272,8 @@ class _BasePlanner:
             return {"error": "planner not configured"}
         try:
             raw = self._complete(system, user)
+        except BudgetExceeded:
+            return {"error": "budget exhausted"}
         except Exception as e:
             return {"error": f"model call failed: {type(e).__name__}"}
         try:
@@ -275,6 +300,8 @@ class _BasePlanner:
         for attempt in range(self.max_repairs + 1):
             try:
                 raw = self._complete(system, user)
+            except BudgetExceeded:
+                return [fallback(e_, "budget exhausted") for e_ in emails]
             except Exception as e:
                 return [fallback(e_, f"model call failed: {type(e).__name__}")
                         for e_ in emails]
@@ -309,6 +336,8 @@ class _BasePlanner:
             raw = self._complete(ASK_SYSTEM_PROMPT,
                                  build_ask_prompt(question, context, nonce,
                                                   static=self.delimiter_mode == "static"))
+        except BudgetExceeded:
+            return {"error": "budget exhausted"}
         except Exception as e:
             return {"error": f"model call failed: {type(e).__name__}"}
         try:
@@ -329,7 +358,7 @@ class OpenRouterPlanner(_BasePlanner):
     def configured(self) -> bool:
         return bool(self.api_key and self.model)
 
-    def _complete(self, system: str, user: str) -> str:
+    def _post(self, system: str, user: str) -> tuple[str, dict]:
         import httpx
         r = httpx.post(OPENROUTER_URL,
                        headers={"Authorization": f"Bearer {self.api_key}"},
@@ -349,12 +378,13 @@ class OpenRouterPlanner(_BasePlanner):
         r.raise_for_status()
         body = r.json()
         u = body.get("usage") or {}
+        usage = {}
         if u:
-            self._usage = getattr(self, "_usage", []) + [{
-                "model": self.model,
-                "prompt_tokens": int(u.get("prompt_tokens", 0)),
-                "completion_tokens": int(u.get("completion_tokens", 0))}]
-        return body["choices"][0]["message"]["content"]
+            usage = {"model": self.model,
+                     "prompt_tokens": int(u.get("prompt_tokens", 0)),
+                     "completion_tokens": int(u.get("completion_tokens", 0))}
+            self._usage = getattr(self, "_usage", []) + [usage]
+        return body["choices"][0]["message"]["content"], usage
 
 
 class OllamaPlanner(_BasePlanner):
@@ -369,11 +399,11 @@ class OllamaPlanner(_BasePlanner):
     def configured(self) -> bool:
         return bool(self.model)
 
-    def _complete(self, system: str, user: str) -> str:
+    def _post(self, system: str, user: str) -> tuple[str, dict]:
         import httpx
         r = httpx.post(self.url, json={
             "model": self.model, "format": "json", "stream": False,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}]}, timeout=120.0)
         r.raise_for_status()
-        return r.json()["message"]["content"]
+        return r.json()["message"]["content"], {}

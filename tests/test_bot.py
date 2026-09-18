@@ -302,6 +302,22 @@ def test_ask_without_a_key_explains_what_does_work(bot_env):
     assert "/recent" in msg.sent[0] and "OPENROUTER_API_KEY" in msg.sent[0]
 
 
+def test_ask_names_the_budget_when_it_is_exhausted(bot_env):
+    """A budget refusal must be visible, not silent — see bot._budget_exhausted."""
+    _, bot = bot_env
+
+    class ExhaustedBudget:
+        exhausted = True
+
+    class ExhaustedPlanner:
+        api_key = "k"
+        budget = ExhaustedBudget()
+    bot.planner = ExhaustedPlanner()
+    u, msg = _update()
+    asyncio.run(bot.on_ask(u, _ctx("anything")))
+    assert "budget" in msg.sent[0].lower()
+
+
 def test_interactive_commands_all_guard(bot_env):
     _, bot = bot_env
     for handler, ctx in ((bot.on_start, None), (bot.on_recent, _ctx()),

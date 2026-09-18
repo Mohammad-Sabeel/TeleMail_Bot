@@ -20,6 +20,7 @@ from pathlib import Path
 
 from telemail.bot import TeleMailBot
 from telemail.broker.broker import Broker
+from telemail.budget import Budget
 from telemail.config import get_settings
 from telemail.db import Database
 from telemail.gmail.adapter import GmailReadAdapter
@@ -56,6 +57,7 @@ def build_app(db_path: str | None = None) -> App:
     own = s.own_address or adapter.profile().get("emailAddress", "")
     broker = Broker(db, adapter, write_service=None)
     planner = OpenRouterPlanner(s.openrouter_api_key, s.model_name)
+    planner.budget = Budget(daily_tokens=s.daily_token_budget)
 
     app = App(db=db, adapter=adapter,
               sync=SyncEngine(db, adapter, own_address=own),
@@ -69,6 +71,7 @@ def build_app(db_path: str | None = None) -> App:
     app.bot.sync_fn = app.sync.poll
     app.bot.triage_fn = lambda: triage_all(app)
     app.bot.reports_dir = Path("data/reports")
+    app.bot.max_reads_per_sync = s.max_reads_per_sync
     if s.virustotal_api_key:
         app.bot.threat_intel = VirusTotal(s.virustotal_api_key)
     return app

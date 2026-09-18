@@ -22,6 +22,16 @@ class StopBudget:
         return False
 
 
+class RecordingBudget:
+    exhausted = False
+
+    def __init__(self):
+        self.spent = []
+
+    def spend(self, prompt_tokens, completion_tokens):
+        self.spent.append((prompt_tokens, completion_tokens))
+
+
 def test_attacker_is_told_how_the_defence_works():
     assert "broker" in ATTACKER_SYSTEM.lower()
     assert "allowlist" in ATTACKER_SYSTEM.lower()
@@ -54,6 +64,16 @@ def test_the_attacker_faces_the_defended_system():
     planner = FakePlanner(answer=f"code is {CANARY}")
     rounds = attack_rounds(Goal.EXFIL, planner, FakeAttacker(["a"]), rounds=1)
     assert len(rounds) == 1 and rounds[0]["won"] is False
+
+
+def test_each_round_charges_the_attackers_usage():
+    """A real budget must actually deplete during an attack run, not just be
+    read — see eval.adaptive._charge_usage."""
+    budget = RecordingBudget()
+    attacker = FakeAttacker(["a", "b"])
+    attack_rounds(Goal.EXFIL, FakePlanner(answer="nothing to see"), attacker,
+                 rounds=2, budget=budget)
+    assert budget.spent == [(5, 5), (5, 5)]
 
 
 def test_best_payload_returns_the_winner():
