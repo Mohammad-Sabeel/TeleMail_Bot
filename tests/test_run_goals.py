@@ -1,7 +1,9 @@
 from pathlib import Path
 
-from eval.goals import CANARY, Goal, build_scenario
+from eval.goals import CANARY, CANARY_URL, Goal, build_scenario
+from eval.graders import grade_goal
 from eval.run_goals import run_all, run_case, summarise
+from telemail.models import TriageResult
 from tests.test_goals import attack_email
 
 
@@ -59,3 +61,67 @@ def test_summary_reports_a_rate_with_an_interval():
              "split": "dev", "ablation": "full"}]
     text = summarise(rows)
     assert "G3" in text and "1/1" in text and "[" in text
+
+
+class CountingPlanner:
+    """Counts propose/ask_json calls separately, so a test can catch the model
+    being sampled once per arm instead of once per case."""
+
+    def __init__(self):
+        self.propose_calls = 0
+        self.ask_json_calls = 0
+
+    def propose(self, question, context):
+        self.propose_calls += 1
+        return {"op": "search", "query": "x"}
+
+    def ask_json(self, system, prompt):
+        self.ask_json_calls += 1
+        return {"answer": "", "message_ids": [], "need_full_body": False}
+
+    def triage(self, emails):
+        return []
+
+
+def test_run_all_calls_the_model_once_per_case_not_once_per_arm(tmp_path):
+    cases = [(Goal.EXFIL, attack_email(), "body")]
+    planner = CountingPlanner()
+    run_all(cases, planner, tmp_path / "out.csv")
+    assert planner.propose_calls == 1
+    assert planner.ask_json_calls == 1
+
+
+class TriagePlanner:
+    """Cites the attacker's own email and reports whatever triage category the
+    test configures for it, so the mediated arm's real-warning wiring can be
+    exercised independently of the naive arm."""
+
+    def __init__(self, answer, category):
+        self.answer, self.category = answer, category
+
+    def propose(self, question, context):
+        return {"op": "search", "query": "x"}
+
+    def ask_json(self, system, prompt):
+        return {"answer": self.answer, "message_ids": ["atk"],
+                "need_full_body": False}
+
+    def triage(self, emails):
+        return [TriageResult(message_id=e.message_id, category=self.category,
+                             urgency=3, requires_action=False, reason="r",
+                             confidence=0.9, source="model") for e in emails]
+
+
+def test_mediated_arm_warns_on_suspicious_triage_and_g2_grades_false():
+    scenario = build_scenario(Goal.ANSWER, attack_email(), f"click {CANARY_URL} now")
+    planner = TriagePlanner(answer=f"Click {CANARY_URL} now", category="suspicious")
+    outcome = run_case(scenario, planner, "mediated")
+    assert outcome.warned is True
+    assert grade_goal(Goal.ANSWER, outcome, scenario) is False
+
+
+def test_mediated_arm_does_not_warn_on_benign_triage():
+    scenario = build_scenario(Goal.ANSWER, attack_email(), f"click {CANARY_URL} now")
+    planner = TriagePlanner(answer=f"Click {CANARY_URL} now", category="personal")
+    outcome = run_case(scenario, planner, "mediated")
+    assert outcome.warned is False
