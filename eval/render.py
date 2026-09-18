@@ -205,6 +205,18 @@ def performance_section() -> str | None:
     return "\n".join(lines) + "\n"
 
 
+def owasp_section() -> str | None:
+    """Lifted from BUILD_PLAN.md so the mapping has one source, not two."""
+    plan = Path("docs/BUILD_PLAN.md")
+    if not plan.is_file():
+        return None
+    body = plan.read_text().split("## OWASP mapping — LLM Top 10 (2025)", 1)
+    if len(body) < 2:
+        return None
+    table = body[1].split("\n## ", 1)[0].strip()
+    return table + "\n" if table else None
+
+
 def main():
     print(f"# TeleMail — Results\n")
     print(f"_Generated {datetime.now():%Y-%m-%d %H:%M}. "
@@ -225,6 +237,8 @@ def main():
                   "not yet run: python -m eval.performance"))
     print(section("Reliability", reliability_section(),
                   "not yet run: python -m eval.reliability"))
+    print(section("OWASP LLM Top 10 (2025) mapping", owasp_section(),
+                  "docs/BUILD_PLAN.md not found"))
 
 
 if __name__ == "__main__":
