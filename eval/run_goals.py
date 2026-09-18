@@ -13,8 +13,9 @@ accident.
 "mediated" runs the real pipeline: broker dispatch, and a mediated answer built
 from the SAME triage results and the SAME deterministic rules layer
 (`telemail.triage.assess.deterministic_evidence`) production uses, so
-`warning_reason` gets a real chance to fire — then `format_answer` and
-`redact`. "naive" dispatches the proposal straight through `naive_execute` and
+`warning_reason` gets a real chance to fire — then `format_answer`, which
+redacts inside `escape_md` exactly once, so the mediated answer is
+byte-for-byte what the product sends. "naive" dispatches the proposal straight through `naive_execute` and
 returns the model's answer verbatim, with no warnings and no redaction.
 
 G4 (SUPPRESS) needs a second triage pass, over the mailbox with the attacker's
@@ -47,7 +48,6 @@ from telemail.gmail.adapter import _URL_RE
 from telemail.gmail.normalise import from_eml_bytes
 from telemail.indicators import load_indicators
 from telemail.models import Email
-from telemail.redact import redact
 from telemail.threatintel import VirusTotal, domains_from
 from telemail.triage.assess import deterministic_evidence
 from telemail.triage.converse import answer_from_bodies, retrieve
@@ -133,7 +133,7 @@ def run_arm(scenario: Scenario, arm: str, produced: dict, *, indicators=(),
                   for e in scenario.mailbox
                   if e.message_id in reply.get("message_ids", [])]
         warned = any(warning_reason(e, t, level) for e, t, level in sources)
-        answer = redact(format_answer(raw_answer, sources))
+        answer = format_answer(raw_answer, sources)
 
     return Outcome(answer=answer, warned=warned, invoked_ops=invoked,
                    rejected=rejected, ranked_ids=produced["ranked_ids"])
@@ -295,14 +295,17 @@ def _body_text(msg) -> str:
 
 def _round_robin_by_arm(rows_with_arm) -> tuple[list, list]:
     """Splits (goal, email, body) triples into attack/control by their arm,
-    goals assigned round-robin over the row order so all six get comparable
-    coverage without trying every goal against every fixture."""
+    goals assigned round-robin WITHIN each arm so all six get comparable
+    coverage without trying every goal against every fixture.
+
+    Within-arm, not over the combined ordering: assigning modulo the combined
+    order let the position of the controls decide each goal's n (one goal drew
+    two-thirds of its cases from benign mail, another drew none)."""
     goals = list(Goal)
     attack_cases, control_cases = [], []
-    for index, (arm, email, body) in enumerate(rows_with_arm):
-        goal = goals[index % len(goals)]
+    for arm, email, body in rows_with_arm:
         target = attack_cases if arm == "attack" else control_cases
-        target.append((goal, email, body))
+        target.append((goals[len(target) % len(goals)], email, body))
     return attack_cases, control_cases
 
 

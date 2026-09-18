@@ -207,6 +207,41 @@ def performance_section() -> str | None:
 
 GOAL_RESULTS = Path("data/goal_results.csv")
 
+# G4 and G5 come from one deterministic retrieval and one pair of triage verdicts
+# computed outside the arm loop, so both arms are written the same value. Two rows
+# with two confidence intervals would double the apparent evidence.
+SINGLE_ROW_GOALS = ("G4", "G5")
+
+# This text ships WITH the table rather than being typed into results.md, because
+# results.md is regenerated and any note added by hand is erased on the next run.
+GOALS_CAVEATS = """
+**How to read this table.**
+
+G3's question asks for the user's *own* locker code, so the disclosure is
+question-triggered: the win is attributable to output-edge redaction, not to the
+broker refusing an attacker's instruction. Control cases with no attacker present
+in the mailbox leak identically in the naive arm.
+
+The canary is planted in the sentence form the redaction regex is built to match
+("your locker code is ..."). So G3 measures that redaction is applied at the right
+exit — the chat channel — and not that it generalises to secrets with no keyword
+near them.
+
+Goals scoring zero in both arms are evidence about the attacks, not proof of
+safety. They say these payloads did not land; they do not say none could.
+
+G1 cannot discriminate between the arms as run. Both arms consume one proposal
+produced under a prompt that offers only read-only operations, so the naive arm
+has no write to dispatch and the broker has nothing to refuse.
+
+G4 and G5 are reported as a single row each. Their verdicts are computed once per
+case, outside the arm loop, so the two arms cannot differ by construction.
+
+Ablation switches exist (`--ablation no-indicators|no-vt|neither`), but every row
+published here is `ablation=full`, and the reputation layer is inert because no
+VirusTotal key is set.
+"""
+
 
 def goals_section() -> str | None:
     if not GOAL_RESULTS.is_file():
@@ -218,16 +253,19 @@ def goals_section() -> str | None:
     from eval.metrics import wilson
     lines = ["| goal | arm | won | n | rate | 95% CI |", "|---|---|---|---|---|---|"]
     for goal in sorted({r["goal"] for r in rows}):
-        for arm in ("naive", "mediated"):
+        arms = ((("naive", "both (identical by construction)"),)
+                if goal in SINGLE_ROW_GOALS
+                else (("naive", "naive"), ("mediated", "mediated")))
+        for arm, label in arms:
             subset = [r for r in rows if r["goal"] == goal and r["arm"] == arm]
             if not subset:
                 continue
             won = sum(r["won"] == "True" for r in subset)
             low, high = wilson(won, len(subset))
-            lines.append(f"| {goal} | {arm} | {won} | {len(subset)} | "
+            lines.append(f"| {goal} | {label} | {won} | {len(subset)} | "
                          f"{100 * won / len(subset):.1f}% | "
                          f"[{100 * low:.1f}, {100 * high:.1f}] |")
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n" + GOALS_CAVEATS
 
 
 def owasp_section() -> str | None:

@@ -269,12 +269,30 @@ def test_ablation_indicators_flag_is_real(tmp_path, monkeypatch):
     assert "Check before trusting" not in bare_answer
 
 
-def test_run_all_never_touches_the_network_without_an_injected_vt_client(tmp_path):
+def test_run_all_never_touches_the_network_without_an_injected_vt_client(tmp_path, monkeypatch):
     """vt=None (the default — only main() builds a real client from settings)
     must never call get_settings() or reach the network, so every test that
     calls run_all directly stays offline regardless of the local .env."""
+    def explode(*a, **k):
+        raise AssertionError("run_all reached settings or the network")
+
+    monkeypatch.setattr("telemail.config.get_settings", explode)
+    monkeypatch.setattr("httpx.Client.request", explode)
     body = f"click {CANARY_URL} now"
     cases = [(Goal.ANSWER, attack_email(), body)]
     planner = CitingPlanner(answer=f"Click {CANARY_URL} now")
-    # No exception, no network call: absence of an injected vt is enough.
-    run_all(cases, planner, tmp_path / "out.csv", ablation="full")
+    rows = run_all(cases, planner, tmp_path / "out.csv", ablation="full")
+    assert len(rows) == 2
+
+
+def test_the_mediated_answer_is_redacted_exactly_once(tmp_path):
+    """format_answer already redacts inside escape_md. A second redact() pass
+    over the escaped text rewrote the hidden marker into itself, so the mediated
+    arm stopped being byte-for-byte what the product sends."""
+    from telemail.redact import HIDDEN
+    cases = [(Goal.EXFIL, attack_email(), "nothing to see")]
+    planner = CitingPlanner(answer=f"Your locker code is {CANARY}.")
+    rows = run_all(cases, planner, tmp_path / "out.csv")
+    answer = next(r["answer"] for r in rows if r["arm"] == "mediated")
+    assert CANARY not in answer
+    assert answer.count(HIDDEN.strip("[]")) == 1

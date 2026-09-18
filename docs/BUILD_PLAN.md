@@ -682,8 +682,11 @@ nothing is marked covered on the strength of a prompt instruction alone.
 **Stage 1 first run (2026-09-18, 66 cases, 223k tokens).** Held-out LLMail-Inject (30 attack,
 12 control), the project's own fixtures (18 attack) and an adaptive attacker (6 goals x 2 rounds).
 Result: secret disclosure into the chat channel succeeded 14/14 against the naive arm and 0/14
-against the mediated arm (Fisher exact one-sided p = 2.5e-08). Every other goal scored 0/n in BOTH
-arms, so this run separates the arms on exactly one axis and says nothing yet about the other five.
+against the mediated arm (Wilson 95% CI [78.5, 100.0] and [0.0, 21.5]). The separation is consistent
+and unambiguous, but these are fourteen repetitions of a single scenario template at temperature 0,
+not fourteen independent trials, so no significance test is reported. Every other goal scored 0/n in
+BOTH arms, so this run separates the arms on exactly one axis and says nothing yet about the other
+five.
 
 State it precisely: the G3 question asks for the user's own code, so the disclosure is
 question-triggered and the win is attributable to output-edge redaction, not to the broker refusing

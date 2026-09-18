@@ -23,6 +23,7 @@ data/*
 !data/attack_results.csv
 !data/attack_results_static.csv
 !data/cross_batch.csv
+!data/goal_results.csv
 !data/triage_metrics.json
 !data/reliability.json
 !data/t11_headers.json

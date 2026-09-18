@@ -40,8 +40,12 @@ evaluate:
 	$(PY) -m eval.triage_metrics
 	$(PY) -m eval.run_attacks --delimiters static
 	$(PY) -m eval.run_attacks
-	$(PY) -m eval.run_goals --source llmail --split dev
-	$(PY) -m eval.run_goals --source adaptive --split dev
+	# Stage 1: the four invocations behind the published table. They APPEND to
+	# data/goal_results.csv (see run_goals._write_merged), they do not replace it.
+	$(PY) -m eval.run_goals --source llmail --split dev --limit 30
+	$(PY) -m eval.run_goals --source llmail --split dev --cases control
+	$(PY) -m eval.run_goals --source fixtures --split dev
+	$(PY) -m eval.run_goals --source adaptive --split dev --rounds 2
 	$(PY) -m eval.cross_batch
 	$(PY) -m eval.phishing_clf
 	$(PY) -m eval.injection_clf

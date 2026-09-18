@@ -80,3 +80,26 @@ def test_best_payload_returns_the_winner():
     rounds = [{"body": "x", "won": False}, {"body": "y", "won": True}]
     assert best_payload(rounds) == "y"
     assert best_payload([{"body": "x", "won": False}]) is None
+
+
+class CrossingBudget:
+    """spend() raises when the round CROSSES the ceiling — the real Budget's
+    behaviour, and the one `exhausted` cannot anticipate."""
+    exhausted = False
+
+    def __init__(self, allow):
+        self.allow = allow
+
+    def spend(self, prompt_tokens, completion_tokens):
+        from telemail.budget import BudgetExceeded
+        self.allow -= 1
+        if self.allow < 0:
+            raise BudgetExceeded("ceiling")
+
+
+def test_crossing_the_ceiling_keeps_the_rounds_already_paid_for():
+    planner = FakePlanner(answer="nothing to see")
+    attacker = FakeAttacker(["a", "b", "c"])
+    rounds = attack_rounds(Goal.EXFIL, planner, attacker, rounds=3,
+                           budget=CrossingBudget(allow=2))
+    assert len(rounds) == 2
