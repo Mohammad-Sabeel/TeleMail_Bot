@@ -660,6 +660,27 @@ Without this there is no RQ1, no precision/recall, and no ablation — **and you
 
 ---
 
+## Related work — contrast, not competition
+
+**ThreatMail** (Hamilas, 2026, github.com/Hamilas/ThreatMail) is the closest public
+system: six LangGraph agents — IOC extraction, threat classification, VirusTotal,
+memory, reasoning, reporting — scoring one email into phishing/suspicious/legit with a
+calibrated confidence, reporting 85% accuracy on 40 synthetic emails against 62% for a
+keyword baseline.
+
+The contrast is the argument of this project. ThreatMail treats detection quality as the
+product: email text flows through six LLM agents into a shared state object, each agent
+free to act on what the previous one wrote, and the verdict is only as good as the
+models. TeleMail assumes the model can be fooled and puts the guarantee elsewhere — a
+deterministic broker with a fixed allowlist, so even a fully compromised planner cannot
+act. Detection is evidence; enforcement is the control.
+
+ThreatMail also analyses one pasted email and never touches a mailbox, so it has no
+confused-deputy exposure to defend against. That is the gap this project addresses.
+
+Note for reuse: the repository shows an MIT badge but ships no LICENSE file, so its code
+is not reusable. Cite and compare; do not copy.
+
 ## Part 5 — Theoretical grounding
 
 Put this in the report. It is the cheapest way to make the project read as computer science rather than as an integration exercise.
