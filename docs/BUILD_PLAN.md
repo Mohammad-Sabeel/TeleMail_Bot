@@ -660,6 +660,25 @@ Without this there is no RQ1, no precision/recall, and no ablation — **and you
 
 ---
 
+## OWASP mapping — LLM Top 10 (2025)
+
+Every risk, how it lands here, what stops it, and where the evidence is. "Gap" entries
+are carried into the stage plan (`docs/superpowers/specs/2026-09-18-flow-labels-and-held-out-attacks-design.md`);
+nothing is marked covered on the strength of a prompt instruction alone.
+
+| OWASP risk | How it applies to TeleMail | Control | Evidence | Gap → stage |
+|---|---|---|---|---|
+| **LLM01 Prompt injection** | Email bodies are attacker-controlled and are read by the planner, the assessor and the conversation | Enforcement, not detection: the broker admits only a fixed allowlist of read-only intents, so a fully compromised planner still cannot act. Two-tier prompt with nonce delimiters as defence in depth | `eval/run_attacks.py` L0–L3 grading, naive arm, `tests/test_boundary.py` | Current fixtures are too weak to separate the arms (0/33 both) → **Stage 1** |
+| **LLM02 Sensitive information disclosure** | Mail holds passwords, OTPs and account numbers; answers and the PDF leave the machine, and prompts go to a third-party provider | Keyword-anchored redaction at both output edges (`telemail/redact.py`) | 7/230 real emails redacted, 1 over-hide; `tests/test_redact.py` | Secrets still reach the model provider, and secrets with no nearby keyword are missed → **Stage 3** |
+| **LLM03 Supply chain** | Model weights, the provider and Python dependencies are all third-party | Model behind one function and one env var, never named in code; pinned `requirements-lock.txt`; `provider.data_collection: deny` | `tests/test_planner.py`, lockfile | Provider is trusted to honour the no-retention flag; state it, do not claim it |
+| **LLM04 Data and model poisoning** | No fine-tuning here, but the detector baselines are trained on public datasets | Detectors are baselines only, never part of the verdict | `eval/injection_clf.py`, measured 50% false-positive rate on real mail | Covered by design; keep detectors out of the control path |
+| **LLM05 Improper output handling** | Model text is rendered into Telegram MarkdownV2 and into a PDF, and may carry links | All outgoing text passes `escape_md`; the report is built from structured data, not model prose | `tests/test_bot.py`, `tests/test_report.py` | Model text is still rendered as trusted prose, and links in answers stay clickable → **Stage 2** |
+| **LLM06 Excessive agency** | An assistant over a mailbox is the classic confused deputy | `gmail.readonly` only; discriminated-union intent allowlist; static dispatch; single-use confirmations; append-only audit log | `tests/test_broker.py`, `telemail/gmail/auth.py` FORBIDDEN_SCOPES, audit triggers | Covered; the arm to prove it is **Stage 1** |
+| **LLM07 System prompt leakage** | The planner prompt could be extracted by a crafted email | Prompts hold no secrets or credentials — only field names and allowed values | `telemail/triage/planner.py` | No test asserts this; add a leak goal to the attack suite → **Stage 1** |
+| **LLM08 Vector and embedding weaknesses** | Features B and D retrieve by TF-IDF similarity, so an attacker who stuffs likely keywords into an email can force it in front of the model | Re-rank pool is capped and the model can only re-order, never act | `telemail/triage/expect.py`, `telemail/triage/converse.py` | Retrieval poisoning is untested → new attack goal in **Stage 1**, integrity labels on retrieved text in **Stage 2** |
+| **LLM09 Misinformation** | A planted email can make an answer confidently wrong | Warnings computed by code from the cited emails; sources always listed | `telemail/bot.py` `format_answer`, `warning_reason` | Warnings are heuristic; untrusted answers are not marked as such → **Stage 2** |
+| **LLM10 Unbounded consumption** | Each `/sync` reads and assesses every new email at the provider's per-token price; a flood of mail, or a loop, spends real money | `max_tokens` capped per call; reads limited to non-bulk mail; VirusTotal capped at 8/sync and 400/day | `telemail/triage/planner.py`, `telemail/threatintel.py` | No daily spend cap on the model, and no cap on emails read per sync → small task in **Stage 1** |
+
 ## Related work — contrast, not competition
 
 **ThreatMail** (Hamilas, 2026, github.com/Hamilas/ThreatMail) is the closest public
