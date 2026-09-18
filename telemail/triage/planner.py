@@ -39,6 +39,10 @@ class PlannerNotConfigured(RuntimeError):
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 BATCH_SIZE = 8
 
+# A provider that reports no usage still costs; charge a conservative estimate
+# rather than nothing, or the ceiling never sees the calls it can't meter.
+UNMETERED_CALL_TOKENS = 1000
+
 # Anything delimiter-shaped in attacker-controlled text is neutralised before
 # the nonce is applied. The nonce alone would suffice; this makes the failure
 # mode visible in the prompt rather than silent.
@@ -255,8 +259,8 @@ class _BasePlanner:
         if self.budget is not None and self.budget.exhausted:
             raise BudgetExceeded("daily model budget reached")
         content, usage = self._post(system, user)
-        if usage:
-            self._charge(usage)
+        self._charge(usage if usage else
+                     {"prompt_tokens": UNMETERED_CALL_TOKENS, "completion_tokens": 0})
         return content if isinstance(content, str) else json.dumps(content)
 
     def drain_usage(self) -> list[dict]:

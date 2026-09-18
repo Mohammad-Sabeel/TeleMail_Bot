@@ -30,6 +30,35 @@ def test_the_ceiling_resets_the_next_day(tmp_path):
     b.spend(90, 0)
 
 
+def test_a_spend_that_crosses_the_ceiling_is_still_recorded(tmp_path):
+    """Reproduces the round-1 defect: a refused spend must persist, or the
+    ceiling never binds and every later call sails through unrecorded."""
+    b = Budget(tmp_path / "b.json", daily_tokens=100, now=lambda: NOW)
+    b.spend(90, 0)
+    with pytest.raises(BudgetExceeded):
+        b.spend(20, 0)
+    assert b.used_today() == 110
+    assert b.exhausted is True
+
+
+def test_the_ceiling_stays_bound_after_crossing_it(tmp_path):
+    b = Budget(tmp_path / "b.json", daily_tokens=100, now=lambda: NOW)
+    b.spend(90, 0)
+    with pytest.raises(BudgetExceeded):
+        b.spend(20, 0)
+    with pytest.raises(BudgetExceeded):
+        b.spend(1, 0)
+
+
+def test_a_crossed_ceiling_survives_a_restart(tmp_path):
+    path = tmp_path / "b.json"
+    b = Budget(path, daily_tokens=100, now=lambda: NOW)
+    b.spend(90, 0)
+    with pytest.raises(BudgetExceeded):
+        b.spend(20, 0)
+    assert Budget(path, daily_tokens=100, now=lambda: NOW).exhausted is True
+
+
 def test_usage_survives_a_restart(tmp_path):
     path = tmp_path / "b.json"
     Budget(path, daily_tokens=100, now=lambda: NOW).spend(40, 0)
@@ -64,6 +93,17 @@ def test_planner_refuses_once_the_budget_is_gone(tmp_path, monkeypatch):
     monkeypatch.setattr(planner, "_post", lambda *a, **k: (
         {"answer": "ok"}, {"prompt_tokens": 1, "completion_tokens": 1}))
     assert planner.ask_json("system", "prompt") == {"error": "budget exhausted"}
+
+
+def test_a_call_with_no_reported_usage_still_charges_an_estimate(tmp_path, monkeypatch):
+    from telemail.triage.planner import OpenRouterPlanner, UNMETERED_CALL_TOKENS
+
+    b = Budget(tmp_path / "b.json", daily_tokens=10_000, now=lambda: NOW)
+    planner = OpenRouterPlanner("key", "some-model")
+    planner.budget = b
+    monkeypatch.setattr(planner, "_post", lambda *a, **k: ("{}", {}))
+    planner.ask_json("system", "prompt")
+    assert b.used_today() == UNMETERED_CALL_TOKENS
 
 
 def test_sync_caps_how_many_emails_are_read():

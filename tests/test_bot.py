@@ -302,19 +302,36 @@ def test_ask_without_a_key_explains_what_does_work(bot_env):
     assert "/recent" in msg.sent[0] and "OPENROUTER_API_KEY" in msg.sent[0]
 
 
+class ExhaustedBudget:
+    exhausted = True
+
+
+class ExhaustedPlanner:
+    """Configured, but its budget is spent — used to check that a budget
+    refusal is visible in Telegram rather than the generic no-answer text."""
+    api_key = "k"
+    budget = ExhaustedBudget()
+
+    def ask_json(self, system, user):
+        return {"error": "budget exhausted"}
+
+
 def test_ask_names_the_budget_when_it_is_exhausted(bot_env):
     """A budget refusal must be visible, not silent — see bot._budget_exhausted."""
     _, bot = bot_env
-
-    class ExhaustedBudget:
-        exhausted = True
-
-    class ExhaustedPlanner:
-        api_key = "k"
-        budget = ExhaustedBudget()
     bot.planner = ExhaustedPlanner()
     u, msg = _update()
     asyncio.run(bot.on_ask(u, _ctx("anything")))
+    assert "budget" in msg.sent[0].lower()
+
+
+def test_text_question_names_the_budget_when_it_is_exhausted(bot_env):
+    """Same guarantee via the plain-text question route (on_text -> interpret
+    -> _handle_question), not just the /ask command."""
+    _, bot = bot_env
+    bot.planner = ExhaustedPlanner()
+    u, msg = _update(text="what is urgent today")
+    asyncio.run(bot.on_text(u, None))
     assert "budget" in msg.sent[0].lower()
 
 

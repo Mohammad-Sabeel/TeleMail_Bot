@@ -38,12 +38,16 @@ class Budget:
 
     def spend(self, prompt_tokens: int, completion_tokens: int) -> None:
         total = self.used_today() + int(prompt_tokens) + int(completion_tokens)
-        if total > self.daily_tokens:
-            raise BudgetExceeded(
-                f"daily model budget reached: {self.used_today()} of "
-                f"{self.daily_tokens} tokens used today")
+        # Record first, then refuse. A ceiling that forgets the call it just
+        # refused never binds: the next call would recompute the same
+        # under-ceiling total from what was last written and sail through —
+        # forever, since nothing was ever persisted past the ceiling.
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps({self._today(): total}))
         except OSError:
             pass
+        if total > self.daily_tokens:
+            raise BudgetExceeded(
+                f"daily model budget reached: {total} of "
+                f"{self.daily_tokens} tokens used today")
