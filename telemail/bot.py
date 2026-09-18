@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from telemail.redact import redact
+from telemail.indicators import add_indicator, load_indicators
 from telemail.models import Email, TriageResult
 from telemail.report import ReportEntry, build_report, caption, render_pdf
 from telemail.triage.assess import assess_email
@@ -92,6 +93,7 @@ Works without a model:
 Needs `OPENROUTER_API_KEY` and `MODEL_NAME`:
 /ask `<question>` — ask about your inbox in plain English
 /forget — clear the conversation
+/flag <text> — mark a phrase or domain as known\\-bad
 
 Or just talk: ask a question, or say "sync my mail" — actions ask before running\\."""
 
@@ -378,6 +380,7 @@ class TeleMailBot:
         # Set by the composition root; None disables the reading/report stage
         # (bots built without it, e.g. in tests, never read mail).
         self.reports_dir: Path | None = None
+        self.indicators_path = Path("data/indicators.txt")
         # Conversation memory: the user's messages and the bot's answers only —
         # never retrieved email text, so an email cannot steer later turns.
         self.memory: deque[tuple[str, str]] = deque(maxlen=10)
@@ -535,6 +538,22 @@ class TeleMailBot:
         self._pending.clear()
         await update.message.reply_text("Conversation forgotten.")
 
+    async def on_flag(self, update, context) -> None:
+        """Add a known-bad phrase, domain or address to the indicator list."""
+        if not self._guard(update):
+            return
+        entry = " ".join(getattr(context, "args", []) or []).strip()
+        if not entry:
+            await update.message.reply_text(
+                "Usage: /flag <phrase, domain or address>\n"
+                "Example: /flag ignore previous instructions\n"
+                "Anything matching it is marked a threat in the next report.")
+            return
+        if add_indicator(self.indicators_path, entry):
+            await update.message.reply_text(f"Flagged: {entry.lower()}")
+        else:
+            await update.message.reply_text(f"Already on the list: {entry.lower()}")
+
     async def on_start(self, update, _context) -> None:
         if not self._guard(update):
             return
@@ -687,6 +706,7 @@ class TeleMailBot:
         """Blocking (a Gmail read and a model call per email): run via to_thread.
         Bodies are read through the broker and discarded; only the verdict is stored."""
         entries, not_read = [], []
+        indicators = load_indicators(self.indicators_path)
         for mid in message_ids:
             email, triage = self.db.get_email(mid), self.db.get_triage(mid)
             if email is None:
@@ -702,7 +722,7 @@ class TeleMailBot:
             except Exception:
                 log.exception("could not read %s", mid)
                 read = None
-            verdict = assess_email(email, triage, read, self.planner)
+            verdict = assess_email(email, triage, read, self.planner, indicators)
             self.db.upsert_assessment(mid, verdict.level.name, verdict.evidence)
             entries.append(ReportEntry(
                 message_id=mid, sender=sender, subject=email.subject,
@@ -820,6 +840,7 @@ class TeleMailBot:
                               ("suspicious", self.on_suspicious),
                               ("search", self.on_search),
                               ("ask", self.on_ask), ("forget", self.on_forget),
+                              ("flag", self.on_flag),
                               ("status", self.on_status)):
             app.add_handler(CommandHandler(name, handler))
         app.add_handler(CallbackQueryHandler(self.on_callback))
