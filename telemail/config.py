@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     poll_seconds: int = 60
     own_address: str = ""
 
+    virustotal_api_key: str = ""   # optional; empty means no lookups are made
     guard_model_path: str = "data/prompt_guard"
     guard_threshold: float = 0.5
 

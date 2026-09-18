@@ -30,6 +30,7 @@ from pathlib import Path
 
 from telemail.redact import redact
 from telemail.indicators import add_indicator, load_indicators
+from telemail.threatintel import domains_from
 from telemail.models import Email, TriageResult
 from telemail.report import ReportEntry, build_report, caption, render_pdf
 from telemail.triage.assess import assess_email
@@ -381,6 +382,7 @@ class TeleMailBot:
         # (bots built without it, e.g. in tests, never read mail).
         self.reports_dir: Path | None = None
         self.indicators_path = Path("data/indicators.txt")
+        self.threat_intel = None     # a VirusTotal client, when a key is set
         # Conversation memory: the user's messages and the bot's answers only —
         # never retrieved email text, so an email cannot steer later turns.
         self.memory: deque[tuple[str, str]] = deque(maxlen=10)
@@ -722,7 +724,10 @@ class TeleMailBot:
             except Exception:
                 log.exception("could not read %s", mid)
                 read = None
-            verdict = assess_email(email, triage, read, self.planner, indicators)
+            vt = (self.threat_intel.reports(domains_from(read))
+                  if self.threat_intel is not None and read else [])
+            verdict = assess_email(email, triage, read, self.planner,
+                                   indicators, vt)
             self.db.upsert_assessment(mid, verdict.level.name, verdict.evidence)
             entries.append(ReportEntry(
                 message_id=mid, sender=sender, subject=email.subject,
