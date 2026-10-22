@@ -26,10 +26,14 @@ data/*
 !data/attack_results_static.csv
 !data/cross_batch.csv
 !data/goal_results.csv
-!data/triage_metrics.json
 !data/reliability.json
 !data/t11_headers.json
 !data/performance.json
 
 # generated knowledge graph (regenerate: graphify update .)
 graphify-out/
+
+# Personal tooling and working notes: kept locally, not published.
+.claude/
+CLAUDE.md
+docs/superpowers/

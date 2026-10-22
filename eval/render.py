@@ -47,11 +47,13 @@ def triage_section() -> str | None:
               f"| actually not | {h['fp']} | {h['tn']} |", ""]
 
     fns = r.get("false_negatives", [])
+    # Sender domain only: this file is published, the inbox is not. Subjects
+    # for the write-up are in data/triage_metrics.json, which stays local.
     lines.append(f"**False negatives ({len(fns)})** — each requires an "
-                 f"explanation in the report.\n")
+                 f"explanation in the report (subjects: data/triage_metrics.json).\n")
     for f in fns:
-        lines.append(f"- `{f['source']}` u={f['urgency']} — {f['sender']} — "
-                     f"{f['subject']}")
+        lines.append(f"- `{f['source']}` u={f['urgency']} — "
+                     f"{f['sender'].rpartition('@')[2]}")
     return "\n".join(lines) + "\n"
 
 
@@ -281,7 +283,7 @@ def owasp_section() -> str | None:
 
 
 def main():
-    print(f"# TeleMail — Results\n")
+    print("# TeleMail — Results\n")
     print(f"_Generated {datetime.now():%Y-%m-%d %H:%M}. "
           f"Every figure below is produced by `make evaluate`; none is typed "
           f"by hand._\n")
