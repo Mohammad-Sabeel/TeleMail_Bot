@@ -60,7 +60,8 @@ def build_app(db_path: str | None = None) -> App:
     planner.budget = Budget(daily_tokens=s.daily_token_budget)
 
     app = App(db=db, adapter=adapter,
-              sync=SyncEngine(db, adapter, own_address=own),
+              sync=SyncEngine(db, adapter, own_address=own,
+                              retention_days=s.retention_days),
               broker=broker, planner=planner,
               policy=AlertPolicy(),
               prefilter_cfg=PrefilterConfig(),
@@ -74,6 +75,7 @@ def build_app(db_path: str | None = None) -> App:
     app.bot.max_reads_per_sync = s.max_reads_per_sync
     if s.virustotal_api_key:
         app.bot.threat_intel = VirusTotal(s.virustotal_api_key)
+    app.bot.retention_days = s.retention_days
     return app
 
 

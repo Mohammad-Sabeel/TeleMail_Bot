@@ -34,8 +34,9 @@ model, stops that becoming an action.
 - **Sender checks are computed by code.** SPF, DKIM and DMARC are read from
   Gmail's own `Authentication-Results` (`mx.google.com` only), and they can't be
   overridden by anything a message says.
-- **Email bodies are never stored.** Only metadata and snippets are kept; bodies
-  are fetched on demand.
+- **Email bodies are never stored.** Only metadata and snippets are kept, bodies
+  are fetched on demand, and after 3 days a snippet is cleared too
+  (`RETENTION_DAYS`). The labelled evaluation set is the one exception.
 - **No specific model is part of the design.** The model is one value,
   `MODEL_NAME` in `.env`, chosen by a probe (`make probe`).
 

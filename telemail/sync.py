@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from telemail.gmail.adapter import MessageGone, WatermarkExpired
 from telemail.gmail.normalise import from_gmail_payload
@@ -41,6 +42,7 @@ class SyncStats:
     inserted_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     resynced: bool = False
+    purged: int = 0                  # emails whose preview text aged out
     watermark: str | None = None
 
     @property
@@ -49,10 +51,22 @@ class SyncStats:
 
 
 class SyncEngine:
-    def __init__(self, db, adapter, own_address: str = ""):
+    def __init__(self, db, adapter, own_address: str = "", retention_days: int = 3,
+                 now=None):
         self.db = db
         self.adapter = adapter
         self.own_address = own_address
+        self.retention_days = retention_days
+        self.now = now or (lambda: datetime.now().astimezone())
+
+    def purge_old_content(self) -> int:
+        """Retention: mail older than the window keeps its metadata but loses
+        its preview text. Runs at the end of every cycle, so it needs no timer."""
+        cutoff = self.now() - timedelta(days=self.retention_days)
+        blanked = self.db.purge_content(cutoff)
+        if blanked:
+            log.info("retention: blanked preview text of %d email(s)", blanked)
+        return blanked
 
     # ------------------------------------------------------------- ingest
 
@@ -95,6 +109,7 @@ class SyncEngine:
             stats.watermark = watermark
         self.db.log(actor="sync", event="bootstrap",
                     payload={"inserted": stats.inserted, "watermark": watermark})
+        stats.purged = self.purge_old_content()
         return stats
 
     def resync(self) -> SyncStats:
@@ -148,4 +163,5 @@ class SyncEngine:
         else:
             log.warning("holding watermark at %s after %d error(s)",
                         watermark, len(stats.errors))
+        stats.purged = self.purge_old_content()
         return stats

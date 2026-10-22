@@ -128,3 +128,18 @@ def render_pdf(report: SyncReport, path: Path, font_path: str | None = None) -> 
     path.parent.mkdir(parents=True, exist_ok=True)
     pdf.output(str(path))
     return path
+
+
+def purge_reports(directory, before: datetime) -> int:
+    """Delete report PDFs older than `before`, always keeping the newest one so
+    /report still has something to send. Returns how many were deleted."""
+    directory = Path(directory)
+    if not directory.is_dir():
+        return 0
+    pdfs = sorted(directory.glob("*.pdf"), key=lambda p: p.stat().st_mtime)
+    deleted = 0
+    for path in pdfs[:-1]:
+        if datetime.fromtimestamp(path.stat().st_mtime, before.tzinfo) < before:
+            path.unlink()
+            deleted += 1
+    return deleted

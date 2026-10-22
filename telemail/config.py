@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     gmail_token_path: str = "data/token.json"
     db_path: str = "data/telemail.db"
     poll_seconds: int = 60
+    retention_days: int = 3   # after this, mail keeps its metadata but loses its preview text
     own_address: str = ""
 
     virustotal_api_key: str = ""   # optional; empty means no lookups are made

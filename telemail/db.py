@@ -393,6 +393,25 @@ class Database:
                 found.append(e)
         return sorted(found, key=lambda e: _aware(e.received_at), reverse=True)
 
+    def purge_content(self, before: datetime) -> int:
+        """Retention (D4): blank the preview text of mail older than `before`.
+        Metadata, verdicts, labels and the audit log stay, so the evaluation
+        still works. Snippets are the only email content this database holds.
+        Labelled mail is exempt: it is RQ1's ground truth, and the triage prompt
+        reads the preview, so blanking it would make RQ1 unreproducible."""
+        blanked = 0
+        for r in self.con.execute(
+                "SELECT message_id, received_at, snippet FROM emails "
+                "WHERE message_id NOT IN (SELECT message_id FROM labels)"):
+            if not r["snippet"]:
+                continue
+            if _aware(datetime.fromisoformat(r["received_at"])) < _aware(before):
+                self.con.execute("UPDATE emails SET snippet = '' WHERE message_id = ?",
+                                 (r["message_id"],))
+                blanked += 1
+        self.con.commit()
+        return blanked
+
     # ----------------------------------------------------------- assessments
 
     def upsert_assessment(self, message_id: str, level: str, evidence: list[str]) -> None:
