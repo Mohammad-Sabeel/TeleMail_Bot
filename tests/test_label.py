@@ -94,3 +94,13 @@ def test_progress_reports_against_the_target(db):
     db.add_label("m1", True)
     out = progress(db)
     assert "1/150" in out and "important: 1" in out
+
+
+def test_recheck_bulk_returns_only_bulk_labelled_important(db):
+    db.insert_email(mail("bulk_imp").model_copy(update={"has_list_unsubscribe": True}))
+    db.insert_email(mail("bulk_not").model_copy(update={"has_list_unsubscribe": True}))
+    db.insert_email(mail("direct_imp"))
+    db.add_label("bulk_imp", True)
+    db.add_label("bulk_not", False)
+    db.add_label("direct_imp", True)
+    assert [e.message_id for e in db.bulk_labelled_important()] == ["bulk_imp"]

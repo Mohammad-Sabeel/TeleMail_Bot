@@ -10,6 +10,7 @@ guess would contaminate the ground truth it is about to be measured against.
     python -m scripts.label            # 20 messages
     python -m scripts.label --n 40
     python -m scripts.label --stats
+    python -m scripts.label --recheck-bulk   # re-judge bulk mail labelled important
 """
 from __future__ import annotations
 
@@ -77,6 +78,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--stats", action="store_true")
+    ap.add_argument("--recheck-bulk", action="store_true",
+                    help="re-judge bulk mail labelled important against X1/I4")
     ap.add_argument("--db", default=None)
     args = ap.parse_args()
 
@@ -88,7 +91,7 @@ def main():
         print(f"distinct threads: {len({d['thread_id'] for d in ds})}")
         return
 
-    batch = db.unlabelled(args.n)
+    batch = db.bulk_labelled_important() if args.recheck_bulk else db.unlabelled(args.n)
     if not batch:
         print("Nothing left to label. Run sync, or raise --n.")
         print(progress(db))

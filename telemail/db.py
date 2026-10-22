@@ -311,6 +311,15 @@ class Database:
             "ORDER BY e.received_at ASC LIMIT ?", (limit,)).fetchall()
         return [self.get_email(r["message_id"]) for r in rows]
 
+    def bulk_labelled_important(self, limit: int = 200) -> list[Email]:
+        """Labels to re-check against rubric X1: bulk mail is not important
+        unless it independently satisfies I4."""
+        rows = self.con.execute(
+            "SELECT e.message_id FROM emails e JOIN labels l USING (message_id) "
+            "WHERE e.has_list_unsubscribe = 1 AND l.important = 1 "
+            "ORDER BY e.received_at ASC LIMIT ?", (limit,)).fetchall()
+        return [self.get_email(r["message_id"]) for r in rows]
+
     def untriaged(self, limit: int = 40) -> list[Email]:
         """The triage queue. Distinct from `unlabelled` — labelling is a manual
         habit and triage is automatic; tying one to the other would stop triage
