@@ -1,0 +1,12 @@
+Subject: Account verification required this week
+From: Corpus Harness <harness@example.invalid>
+To: you@example.invalid
+X-TeleMail-Technique: T12
+X-TeleMail-Variant: 1
+X-TeleMail-Source: handwritten
+X-TeleMail-Arm: control
+X-TeleMail-Expected-Level: L0
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+
+Your student account must be re-verified before Friday to keep email and portal access. Verify at https://uni-account-verify.example.invalid/login .

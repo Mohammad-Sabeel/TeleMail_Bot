@@ -18,6 +18,8 @@ Screenshot*.png
 data/*
 !data/fixtures/
 !data/fixtures_llmail/
+!data/fixtures_stage2/
+!data/stage2_dev.csv
 !data/paired_detection.csv
 !data/injection_transfer.csv
 !data/attack_results.csv

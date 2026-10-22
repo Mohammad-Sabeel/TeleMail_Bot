@@ -135,7 +135,10 @@ def run_arm(scenario: Scenario, arm: str, produced: dict, *, indicators=(),
                 for e in scenario.mailbox]
         cited_ids = reply.get("message_ids", [])
         sources = [s for s in seen if s[0].message_id in cited_ids]
-        uncited = [s for s in seen if s[0].message_id not in cited_ids]
+        # "mediated-cited" is the Stage 1 warning (cited emails only), kept as
+        # the before-half of the LLM09 comparison on the same model output.
+        uncited = ([] if arm == "mediated-cited"
+                   else [s for s in seen if s[0].message_id not in cited_ids])
         warned = bool(answer_warnings(sources, uncited))
         answer = format_answer(raw_answer, sources, uncited)
 
@@ -225,7 +228,8 @@ def _write_merged(rows: list[dict], out_csv: Path) -> None:
 
 
 def run_all(cases: list, planner, out_csv: Path, *, ablation: str = "full",
-            source: str = "synthetic", split: str = "dev", vt=None) -> list[dict]:
+            source: str = "synthetic", split: str = "dev", vt=None,
+            arms=("mediated", "naive")) -> list[dict]:
     indicators = _ablation_indicators(ablation)
     vt_reports = _ablation_vt_reports(ablation, cases, vt)
     rows = []
@@ -234,7 +238,7 @@ def run_all(cases: list, planner, out_csv: Path, *, ablation: str = "full",
         produced = model_pass(scenario, planner)
         attack_verdict, control_verdict = ((_suppress_verdicts(planner, scenario, produced))
                                            if goal is Goal.SUPPRESS else (None, None))
-        for arm in ("mediated", "naive"):
+        for arm in arms:
             outcome = run_arm(scenario, arm, produced, indicators=indicators,
                               vt_reports=vt_reports)
             outcome.attack_verdict = attack_verdict
@@ -253,7 +257,7 @@ def run_all(cases: list, planner, out_csv: Path, *, ablation: str = "full",
 def summarise(rows: list[dict]) -> str:
     lines = ["", f"{'goal / arm':<28}{'won':>4}{'n':>5}{'rate':>8}  95% CI", "-" * 62]
     for goal in sorted({r["goal"] for r in rows}):
-        for arm in ("naive", "mediated"):
+        for arm in ("naive", "mediated-cited", "mediated"):
             subset = [r for r in rows if r["goal"] == goal and r["arm"] == arm]
             if subset:
                 lines.append(rate_line(f"{goal} {arm}",
@@ -287,6 +291,14 @@ def parse_args(argv=None):
     ap.add_argument("--cases", choices=("both", "attack", "control"), default="both",
                     help="which fixture arm to load; ignored by --source adaptive, "
                          "which always generates its own payloads")
+    ap.add_argument("--fixtures", default=str(FIXTURES_OWN),
+                    help="fixture directory for --source fixtures (Stage 2 uses "
+                         "data/fixtures_stage2 so data/fixtures stays frozen)")
+    ap.add_argument("--goal", choices=[g.value for g in Goal], default=None,
+                    help="run every case against this goal instead of round-robin")
+    ap.add_argument("--with-cited-only", action="store_true",
+                    help="also record arm 'mediated-cited': the Stage 1 warning, "
+                         "same model output")
     return ap.parse_args(argv)
 
 
@@ -330,14 +342,14 @@ def _llmail_cases(split: str) -> tuple[list, list]:
     return _round_robin_by_arm(parsed)
 
 
-def _own_fixture_cases() -> tuple[list, list]:
+def _own_fixture_cases(fixtures: Path = FIXTURES_OWN) -> tuple[list, list]:
     """The project's OWN adversarial fixtures at data/fixtures/ — an
     in-distribution baseline next to the held-out LLMail pool. These carry no
     split header (they predate the dev/test split), so every fixture is used
     regardless of --split. Parsing follows `eval/run_attacks.py:load_cases`
     rather than inventing a second reader for the same file shape."""
     parsed = []
-    for f in sorted(FIXTURES_OWN.glob("*.eml")):
+    for f in sorted(fixtures.glob("*.eml")):
         raw = f.read_bytes()
         msg = BytesParser(policy=policy.default).parsebytes(raw)
         arm = msg.get("X-TeleMail-Arm")
@@ -348,14 +360,14 @@ def _own_fixture_cases() -> tuple[list, list]:
     return _round_robin_by_arm(parsed)
 
 
-def load_cases(source: str, split: str) -> tuple[list, list]:
+def load_cases(source: str, split: str, fixtures: Path = FIXTURES_OWN) -> tuple[list, list]:
     """Attack cases and control cases (X-TeleMail-Arm "attack" / "control")
     for the given `--source`: the project's own fixtures for "fixtures", the
     held-out LLMail-Inject pool otherwise. Controls are the false-positive
     check — run separately so the caller can record them under their own
     source (e.g. "llmail-control")."""
     if source == "fixtures":
-        return _own_fixture_cases()
+        return _own_fixture_cases(fixtures)
     return _llmail_cases(split)
 
 
@@ -412,17 +424,23 @@ def main(argv=None) -> None:
         rows = (run_all(cases, planner, out, ablation=args.ablation,
                         source="adaptive", split=args.split, vt=vt) if cases else [])
     else:
-        attack_cases, control_cases = load_cases(args.source, args.split)
+        attack_cases, control_cases = load_cases(args.source, args.split, Path(args.fixtures))
+        if args.goal:
+            attack_cases, control_cases = ([(Goal(args.goal), e, b) for _, e, b in cs]
+                                           for cs in (attack_cases, control_cases))
         attack_cases, control_cases = _select_cases(attack_cases, control_cases, args.cases)
         attack_cases, control_cases = _cap_total(attack_cases, control_cases, args.limit)
 
         # run_all appends: the control call below does not erase the attack
         # call's rows, it adds to them (see _write_merged).
+        arms = (("mediated", "mediated-cited", "naive") if args.with_cited_only
+                else ("mediated", "naive"))
         attack_rows = (run_all(attack_cases, planner, out, ablation=args.ablation,
-                               source=args.source, split=args.split, vt=vt)
+                               source=args.source, split=args.split, vt=vt, arms=arms)
                       if attack_cases else [])
         control_rows = (run_all(control_cases, planner, out, ablation=args.ablation,
-                                source=f"{args.source}-control", split=args.split, vt=vt)
+                                source=f"{args.source}-control", split=args.split, vt=vt,
+                                arms=arms)
                         if control_cases else [])
         rows = attack_rows + control_rows
 

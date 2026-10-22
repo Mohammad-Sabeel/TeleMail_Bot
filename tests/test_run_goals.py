@@ -307,3 +307,33 @@ def test_mediated_arm_warns_on_a_flagged_email_the_answer_did_not_cite():
     planner.ask_json = lambda system, prompt: {"answer": "a plain answer", "cited_ids": [2]}
     outcome = run_case(scenario, planner, "mediated", indicators=["evil-signature"])
     assert outcome.warned is True
+
+
+def test_cited_only_arm_reproduces_the_stage1_warning_from_the_same_model_output():
+    """Before/after the LLM09 fix from one model pass: "mediated-cited" warns
+    only on cited emails, "mediated" on every email the model saw."""
+    from eval.run_goals import run_arm
+    scenario = build_scenario(Goal.ANSWER, attack_email(), "evil-signature in the body")
+    planner = CitingPlanner(answer="a plain answer")
+    planner.ask_json = lambda system, prompt: {"answer": "a plain answer", "cited_ids": [2]}
+    produced = model_pass(scenario, planner)
+    kw = {"indicators": ["evil-signature"]}
+    assert run_arm(scenario, "mediated", produced, **kw).warned is True
+    assert run_arm(scenario, "mediated-cited", produced, **kw).warned is False
+
+
+def test_run_all_adds_the_cited_only_arm_only_when_asked(tmp_path):
+    from eval.run_goals import run_all
+    cases = [(Goal.ANSWER, attack_email(), "x")]
+    default = run_all(cases, FakePlanner(), tmp_path / "a.csv")
+    both = run_all(cases, FakePlanner(), tmp_path / "b.csv",
+                   arms=("mediated", "mediated-cited", "naive"))
+    assert {r["arm"] for r in default} == {"mediated", "naive"}
+    assert {r["arm"] for r in both} == {"mediated", "mediated-cited", "naive"}
+
+
+def test_goal_and_fixtures_flags_parse():
+    from eval.run_goals import parse_args
+    a = parse_args(["--source", "fixtures", "--fixtures", "data/fixtures_stage2",
+                    "--goal", "G2", "--with-cited-only"])
+    assert (a.fixtures, a.goal, a.with_cited_only) == ("data/fixtures_stage2", "G2", True)
