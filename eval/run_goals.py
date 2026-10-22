@@ -49,7 +49,7 @@ from telemail.gmail.normalise import from_eml_bytes
 from telemail.indicators import load_indicators
 from telemail.models import Email
 from telemail.threatintel import VirusTotal, domains_from
-from telemail.triage.assess import deterministic_evidence
+from telemail.triage.assess import assess_model, combine_verdict, deterministic_evidence
 from telemail.triage.converse import answer_from_bodies, retrieve
 from telemail.triage.planner import OpenRouterPlanner
 
@@ -72,7 +72,7 @@ def _dispatch(scenario: Scenario, proposal: dict, arm: str) -> tuple[list[str], 
     return ops, not result.ok
 
 
-def _rules_level(email: Email, body: str, indicators, vt_reports) -> str:
+def _rules(email: Email, body: str, indicators, vt_reports):
     """The same deterministic rules layer production runs, so a mediated-arm
     warning is earned the way a real warning would be, not simulated.
 
@@ -80,11 +80,23 @@ def _rules_level(email: Email, body: str, indicators, vt_reports) -> str:
     case has) so indicator/link evidence has something real to match against,
     the way it would against a fetched email in production."""
     read = {"body": body, "links": [{"href": u} for u in _URL_RE.findall(body)]}
-    level, _ = deterministic_evidence(email, read, indicators, vt_reports)
-    return level.name
+    return deterministic_evidence(email, read, indicators, vt_reports)
 
 
-def model_pass(scenario: Scenario, planner) -> dict:
+def _rules_level(email: Email, body: str, indicators, vt_reports) -> str:
+    return _rules(email, body, indicators, vt_reports)[0].name
+
+
+def _assessed_level(email: Email, body: str, triage, assessment, indicators,
+                    vt_reports) -> str:
+    """What production stores after /sync: `assess_email`'s verdict, rebuilt from
+    the assessment `model_pass` already made, so no arm calls the model."""
+    level, evidence = _rules(email, body, indicators, vt_reports)
+    suspicious = bool(triage and triage.category == "suspicious")
+    return combine_verdict(level, evidence, assessment, suspicious).level.name
+
+
+def model_pass(scenario: Scenario, planner, assess: bool = False) -> dict:
     """Everything the model produces for one case: one proposal, one answer,
     one ranking, one triage pass. Both arms are built from this, unchanged.
 
@@ -113,8 +125,12 @@ def model_pass(scenario: Scenario, planner) -> dict:
                                 if i in by_index]}
     ranked_ids = [e.message_id for e in retrieve(scenario.question, scenario.mailbox)]
     triage = {v.message_id: v for v in planner.triage(scenario.mailbox)}
+    # assess=True: every mailbox email gets the /sync assessment, the layer
+    # production warns from (telemail.bot._read_and_assess).
+    assessments = ({e.message_id: assess_model(planner, e, scenario.bodies[e.message_id])
+                    for e in scenario.mailbox} if assess else {})
     return {"proposal": proposal, "reply": reply, "ranked_ids": ranked_ids,
-            "triage": triage}
+            "triage": triage, "assessments": assessments}
 
 
 def run_arm(scenario: Scenario, arm: str, produced: dict, *, indicators=(),
@@ -129,10 +145,14 @@ def run_arm(scenario: Scenario, arm: str, produced: dict, *, indicators=(),
         triage_by_id = produced["triage"]
         # Every mailbox email is in the answer prompt (model_pass), so the ones
         # not cited are the "seen but not cited" half of the warning.
-        seen = [(e, triage_by_id.get(e.message_id),
-                 _rules_level(e, scenario.bodies.get(e.message_id, ""),
-                              indicators, vt_reports))
-                for e in scenario.mailbox]
+        def level(e):
+            body = scenario.bodies.get(e.message_id, "")
+            if arm == "mediated-assessed":
+                return _assessed_level(e, body, triage_by_id.get(e.message_id),
+                                       produced["assessments"].get(e.message_id),
+                                       indicators, vt_reports)
+            return _rules_level(e, body, indicators, vt_reports)
+        seen = [(e, triage_by_id.get(e.message_id), level(e)) for e in scenario.mailbox]
         cited_ids = reply.get("message_ids", [])
         sources = [s for s in seen if s[0].message_id in cited_ids]
         # "mediated-cited" is the Stage 1 warning (cited emails only), kept as
@@ -235,7 +255,7 @@ def run_all(cases: list, planner, out_csv: Path, *, ablation: str = "full",
     rows = []
     for goal, email, body in cases:
         scenario = build_scenario(goal, email, body)
-        produced = model_pass(scenario, planner)
+        produced = model_pass(scenario, planner, assess="mediated-assessed" in arms)
         attack_verdict, control_verdict = ((_suppress_verdicts(planner, scenario, produced))
                                            if goal is Goal.SUPPRESS else (None, None))
         for arm in arms:
@@ -257,7 +277,7 @@ def run_all(cases: list, planner, out_csv: Path, *, ablation: str = "full",
 def summarise(rows: list[dict]) -> str:
     lines = ["", f"{'goal / arm':<28}{'won':>4}{'n':>5}{'rate':>8}  95% CI", "-" * 62]
     for goal in sorted({r["goal"] for r in rows}):
-        for arm in ("naive", "mediated-cited", "mediated"):
+        for arm in ("naive", "mediated-cited", "mediated", "mediated-assessed"):
             subset = [r for r in rows if r["goal"] == goal and r["arm"] == arm]
             if subset:
                 lines.append(rate_line(f"{goal} {arm}",
@@ -299,6 +319,9 @@ def parse_args(argv=None):
     ap.add_argument("--with-cited-only", action="store_true",
                     help="also record arm 'mediated-cited': the Stage 1 warning, "
                          "same model output")
+    ap.add_argument("--with-assessed", action="store_true",
+                    help="also record arm 'mediated-assessed': warnings from the /sync "
+                         "assessment production stores (one extra model call per email)")
     return ap.parse_args(argv)
 
 
@@ -433,8 +456,8 @@ def main(argv=None) -> None:
 
         # run_all appends: the control call below does not erase the attack
         # call's rows, it adds to them (see _write_merged).
-        arms = (("mediated", "mediated-cited", "naive") if args.with_cited_only
-                else ("mediated", "naive"))
+        arms = (("mediated",) + (("mediated-cited",) if args.with_cited_only else ())
+                + (("mediated-assessed",) if args.with_assessed else ()) + ("naive",))
         attack_rows = (run_all(attack_cases, planner, out, ablation=args.ablation,
                                source=args.source, split=args.split, vt=vt, arms=arms)
                       if attack_cases else [])

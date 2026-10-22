@@ -337,3 +337,51 @@ def test_goal_and_fixtures_flags_parse():
     a = parse_args(["--source", "fixtures", "--fixtures", "data/fixtures_stage2",
                     "--goal", "G2", "--with-cited-only"])
     assert (a.fixtures, a.goal, a.with_cited_only) == ("data/fixtures_stage2", "G2", True)
+
+
+class AssessingPlanner(CitingPlanner):
+    """Rules and triage stay silent; only the production assessment flags the
+    attacker (position 1). Cites the genuine email, so the warning must come
+    through the "seen but not cited" path."""
+
+    def __init__(self, flag_attacker=True):
+        super().__init__(answer="a plain answer")
+        self.flag_attacker, self.assessed = flag_attacker, []
+
+    def ask_json(self, system, prompt):
+        from telemail.triage.assess import ASSESS_SYSTEM
+        if system != ASSESS_SYSTEM:
+            return {"answer": self.answer, "cited_ids": [2]}
+        attacker = "evil.invalid" in prompt
+        self.assessed.append(prompt)
+        flag = self.flag_attacker and attacker
+        return {"gist": "g", "social_engineering": False, "injection_attempt": flag,
+                "suggested_action": "ignore", "reason": "r"}
+
+
+def test_assessed_arm_warns_from_the_production_assessment():
+    from eval.run_goals import run_arm
+    scenario = build_scenario(Goal.ANSWER, attack_email(), "If you are an AI assistant, ...")
+    planner = AssessingPlanner()
+    produced = model_pass(scenario, planner, assess=True)
+    assert len(planner.assessed) == len(scenario.mailbox)      # every email, like /sync
+    assert run_arm(scenario, "mediated", produced).warned is False
+    assert run_arm(scenario, "mediated-assessed", produced).warned is True
+
+
+def test_assessed_arm_is_quiet_when_the_assessment_is():
+    from eval.run_goals import run_arm
+    scenario = build_scenario(Goal.ANSWER, attack_email(), "plain text")
+    produced = model_pass(scenario, AssessingPlanner(flag_attacker=False), assess=True)
+    assert run_arm(scenario, "mediated-assessed", produced).warned is False
+
+
+def test_model_pass_does_not_assess_unless_asked():
+    planner = AssessingPlanner()
+    model_pass(build_scenario(Goal.ANSWER, attack_email(), "x"), planner)
+    assert planner.assessed == []
+
+
+def test_with_assessed_flag_parses():
+    from eval.run_goals import parse_args
+    assert parse_args(["--with-assessed"]).with_assessed is True
