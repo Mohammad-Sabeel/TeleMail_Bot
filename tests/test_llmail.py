@@ -5,7 +5,6 @@ from collections import Counter, defaultdict
 from email import policy as email_policy
 from email.parser import BytesParser
 
-import pytest
 
 from eval.llmail import DATASET_URL, fetch, sample, split_for, to_eml, write_fixtures
 

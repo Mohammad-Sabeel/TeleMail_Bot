@@ -5,7 +5,7 @@ import pytest
 
 from scripts.label import RUBRIC_VERSION, progress, render
 from telemail.db import Database
-from telemail.models import Email, SenderSignals, TriageResult
+from telemail.models import Email, SenderSignals
 
 
 def mail(mid="m1", thread="t1", day=1, **sig) -> Email:

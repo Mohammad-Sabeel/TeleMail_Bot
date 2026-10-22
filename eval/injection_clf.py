@@ -31,7 +31,22 @@ from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
-from telemail.triage.guard import _chunks
+
+# T8 buries its instruction in ~400 words of legitimate text. Scoring only the
+# first window would miss it by construction, so long bodies are scored as
+# overlapping chunks and the maximum is taken.
+_CHUNK_WORDS = 180
+_OVERLAP_WORDS = 60
+
+
+def _chunks(text: str) -> list[str]:
+    words = text.split()
+    if len(words) <= _CHUNK_WORDS:
+        return [text] if text.strip() else []
+    step = _CHUNK_WORDS - _OVERLAP_WORDS
+    return [" ".join(words[i:i + _CHUNK_WORDS])
+            for i in range(0, len(words), step)
+            if words[i:i + _CHUNK_WORDS]]
 
 DATA = Path("data/corpus/Prompt_INJECTION_And_Benign_DATASET.jsonl")
 FIXTURES = Path("data/fixtures")

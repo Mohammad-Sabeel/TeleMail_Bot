@@ -4,8 +4,6 @@ A compromised model is simulated so the grading can be exercised end to end
 without an API key. That the naive arm reaches L3 and the brokered arm does not
 is the project's central claim; these tests prove the harness can detect it.
 """
-import json
-from datetime import datetime
 from pathlib import Path
 
 import pytest

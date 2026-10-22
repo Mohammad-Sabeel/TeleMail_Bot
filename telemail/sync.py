@@ -149,19 +149,3 @@ class SyncEngine:
             log.warning("holding watermark at %s after %d error(s)",
                         watermark, len(stats.errors))
         return stats
-
-    # --------------------------------------------------------------- loop
-
-    def run_forever(self, interval_seconds: int = 60) -> None:  # pragma: no cover
-        import time
-        log.info("sync loop starting, every %ss", interval_seconds)
-        while True:
-            try:
-                s = self.poll()
-                if s.inserted:
-                    log.info("ingested %d new (%d dup)", s.inserted, s.duplicates)
-            except KeyboardInterrupt:
-                raise
-            except Exception:
-                log.exception("poll failed; retrying next cycle")
-            time.sleep(interval_seconds)

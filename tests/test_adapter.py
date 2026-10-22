@@ -218,7 +218,6 @@ def test_fetch_of_deleted_message_raises_message_gone():
 
 
 def test_other_http_errors_are_not_mistaken_for_deletion():
-    from telemail.gmail.adapter import MessageGone
     with pytest.raises(_HttpErr):
         GmailReadAdapter(_RaisingService(500)).fetch_metadata("x")
 

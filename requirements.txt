@@ -1,6 +1,6 @@
 google-api-python-client
 google-auth-oauthlib
-python-telegram-bot[job-queue]
+python-telegram-bot
 pydantic
 pydantic-settings
 httpx
@@ -8,8 +8,3 @@ scikit-learn
 joblib
 pytest
 fpdf2
-
-# Optional — Prompt Guard signal. ~2GB with torch. Install only when you
-# reach the guard work; the pipeline runs fine without it.
-# transformers
-# torch

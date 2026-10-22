@@ -198,7 +198,6 @@ def cmd_bot(app: App) -> None:                     # pragma: no cover
 
 def cmd_run(app: App, interval: int) -> None:      # pragma: no cover
     """Headless: no Telegram, alerts logged only. Useful for a cold-start demo."""
-    import asyncio
     import time
     log.info("running headless; polling every %ss", interval)
     while True:

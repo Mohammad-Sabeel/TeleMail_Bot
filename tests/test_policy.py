@@ -4,8 +4,7 @@ from datetime import datetime
 import pytest
 
 from telemail.models import Email, SenderSignals, TriageResult
-from telemail.policy import (AlertPolicy, in_quiet_hours, next_quiet_end,
-                             should_alert)
+from telemail.policy import (AlertPolicy, in_quiet_hours, should_alert)
 
 NOON = datetime(2026, 9, 1, 12, 0)
 MIDNIGHT = datetime(2026, 9, 1, 23, 30)

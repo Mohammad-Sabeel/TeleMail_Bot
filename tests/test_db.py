@@ -1,5 +1,5 @@
 """Database behaviour the rest of the system assumes."""
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 import sqlite3

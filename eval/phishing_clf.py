@@ -62,7 +62,7 @@ def load_training() -> tuple[list[str], list[int]]:
 def train():
     X, y = load_training()
     print(f"training on {len(X)} messages from {', '.join(TRAIN_FILES)}")
-    print(f"  (Nazario and Nigerian_Fraud held out — they are the fixture carriers)")
+    print("  (Nazario and Nigerian_Fraud held out — they are the fixture carriers)")
 
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25,
                                           random_state=SEED, stratify=y)

@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from telemail.bot import (SyncSummary, build_sync_summary, format_sync_summary,
+from telemail.bot import (build_sync_summary, format_sync_summary,
                           open_buttons)
 from telemail.models import Email, SenderSignals, TriageResult
 

@@ -62,9 +62,7 @@ def main():
 
     if not ok:
         print("\nFinish the steps marked above, then re-run this.")
-    elif not tokf.exists():
-        print("\nREADY — run: python -m scripts.hello_gmail")
-    elif not db.exists():
+    elif not (tokf.exists() and db.exists()):
         print("\nREADY — run: python -m telemail sync")
     elif not (s.openrouter_api_key and s.model_name):
         print("\nGmail and Telegram work. Next: set OPENROUTER_API_KEY, then "

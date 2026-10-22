@@ -1,5 +1,4 @@
 import csv
-from pathlib import Path
 
 from eval.goals import CANARY, CANARY_URL, Goal, build_scenario
 from eval.graders import grade_goal

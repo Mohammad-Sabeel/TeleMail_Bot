@@ -1,5 +1,4 @@
 """Feature B matching: keywords, TF-IDF, model re-rank, fallback."""
-import json
 import re
 from datetime import datetime
 

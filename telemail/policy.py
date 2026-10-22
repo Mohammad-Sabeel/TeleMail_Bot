@@ -17,8 +17,8 @@ Two decisions worth defending:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from telemail.models import Email, TriageResult
 

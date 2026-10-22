@@ -2,7 +2,6 @@
 them correctly."""
 from datetime import datetime
 
-import pytest
 
 from telemail.__main__ import (App, alerts_sent_today, pending_alerts,
                                triage_pending)
@@ -172,7 +171,6 @@ def test_backlog_is_scanned_not_just_the_current_batch():
 def test_http_loggers_are_silenced_so_the_token_never_reaches_a_log():
     """python-telegram-bot logs the request URL at INFO, and the URL embeds the
     bot token. Verified by asserting the suppression is actually applied."""
-    import logging
     import re
     src = open("telemail/__main__.py").read()
     assert re.search(r'for noisy in \([^)]*"httpx"', src)

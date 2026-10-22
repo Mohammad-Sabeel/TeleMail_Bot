@@ -2,7 +2,6 @@
 
 These are the six break-it-on-purpose tests the plan gates Phase 2 behind.
 """
-import pytest
 
 from telemail.db import Database
 from telemail.gmail.adapter import MessageGone, WatermarkExpired
@@ -145,7 +144,7 @@ def test_recovery_after_a_failure_gets_the_missed_message():
     e.poll()
     a.fail_on.clear()
     a._page = 0
-    s = e.poll()
+    e.poll()
     assert e.db.count_emails() == 2
     assert e.db.get_state(WATERMARK_KEY) == "101"
 
