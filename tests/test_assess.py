@@ -164,3 +164,34 @@ def test_corpus_injection_email_is_at_least_caution():
                      {"body": body, "links": [], "attachments": []},
                      ScriptedPlanner(flagged.model_dump()))
     assert v.level >= Level.CAUTION
+
+
+# A verified sender's own name over its email provider's click-tracking redirect
+# is how marketing mail is built; the same redirect under another domain's name
+# is how phishing is built.
+TRACKED = {"text": "www.uni.edu/apply", "href": "https://f1njdk2g.r.eu-west-1.awstrack.me/L0/x"}
+VERIFIED = dict(dmarc="pass", auth_source="mx.google.com", first_contact=False)
+
+
+def test_verified_sender_naming_its_own_domain_over_a_redirect_raises_nothing():
+    assert deterministic_evidence(mail(**VERIFIED), read([TRACKED])) == (Level.NONE, [])
+
+
+@pytest.mark.parametrize("sig", [
+    dict(dmarc="pass", first_contact=False),                        # unverified result
+    dict(dmarc="fail", auth_source="mx.google.com", first_contact=False),
+    dict(dmarc="none", auth_source="mx.google.com", first_contact=False),
+])
+def test_own_domain_redirect_still_flagged_without_verified_dmarc(sig):
+    assert deterministic_evidence(mail(**sig), read([TRACKED]))[0] is Level.CAUTION
+
+
+def test_verified_sender_naming_another_domain_is_still_flagged():
+    paypal = {"text": "www.paypal.com", "href": "https://x.r.us-east-1.awstrack.me/L0/y"}
+    level, ev = deterministic_evidence(mail(**VERIFIED), read([paypal]))
+    assert level is Level.CAUTION and "link text shows paypal.com" in ev[0]
+
+
+def test_subdomain_text_counts_as_the_senders_own():
+    link = {"text": "support.uni.edu", "href": "https://c.gle/abc"}
+    assert deterministic_evidence(mail(**VERIFIED), read([link]))[0] is Level.NONE

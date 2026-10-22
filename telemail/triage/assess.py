@@ -57,7 +57,15 @@ def _is_ip(host: str) -> bool:
         return False
 
 
-def link_evidence(links: list[dict]) -> list[str]:
+def _same_site(a: str, b: str) -> bool:
+    return a == b or a.endswith("." + b) or b.endswith("." + a)
+
+
+def link_evidence(links: list[dict], verified_domain: str | None = None) -> list[str]:
+    """`verified_domain`: the sender's domain when DMARC passed on a trusted
+    Authentication-Results. Link text naming that domain over a redirect is the
+    sender's own email provider tracking clicks (4 of 8 real hits), not a lie
+    about where the link goes; text naming any OTHER domain is still flagged."""
     out = []
     for link in links:
         host = _host(link.get("href") or "")
@@ -71,8 +79,8 @@ def link_evidence(links: list[dict]) -> list[str]:
         if shown and "@" not in (link.get("text") or ""):
             text_domain = shown.group(1).lower().removeprefix("www.")
             real = host.removeprefix("www.")
-            if (text_domain != real and not real.endswith("." + text_domain)
-                    and not text_domain.endswith("." + real)):
+            own = verified_domain and _same_site(text_domain, verified_domain)
+            if not _same_site(text_domain, real) and not own:
                 out.append(f"link text shows {text_domain} but goes to {real}")
     return list(dict.fromkeys(out))
 
@@ -117,7 +125,9 @@ def deterministic_evidence(email: Email, read: dict | None,
     if s.reply_to_differs and s.first_contact:
         caution.append("first email from this sender, and replies go elsewhere")
     if read:
-        caution += link_evidence(read.get("links", []))
+        verified = (email.sender_domain.lower()
+                    if s.dmarc == "pass" and s.auth_source else None)
+        caution += link_evidence(read.get("links", []), verified)
         caution += [f"risky attachment: {name}" for name in read.get("attachments", [])
                     if Path(name.lower()).suffix in RISKY_EXTENSIONS]
     if caution:
