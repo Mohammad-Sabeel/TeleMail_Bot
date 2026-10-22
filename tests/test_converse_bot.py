@@ -188,6 +188,24 @@ def test_unusable_model_answer_says_so(make_bot):
     assert "couldn't get a usable answer" in msg.sent[0] and len(bot.memory) == 0
 
 
+def test_flagged_email_the_model_saw_but_did_not_cite_still_warns(make_bot):
+    """Citations are chosen by the model, so an injected email can steer the
+    answer while asking not to be cited. The warning covers every email the
+    model saw."""
+    bot, _, _ = make_bot(Planner())            # cites only the visa letter
+    u, msg = _update(text="did my visa letter come?")
+    asyncio.run(bot.on_text(u, None))
+    reply = msg.sent[0]
+    assert "Check before trusting" in reply
+    assert "Account suspended" in reply and "not cited" in reply
+
+
+def test_clean_uncited_email_does_not_warn():
+    clean = mail("fee", "Fee receipt")
+    assert "Check before trusting" not in format_answer("a", [], uncited=[
+        (clean, tr("fee", "financial"), None)])
+
+
 def test_format_answer_escapes_model_text():
     text = format_answer("*bold* _claim_", [])
     assert "*bold*" not in text

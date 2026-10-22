@@ -296,3 +296,14 @@ def test_the_mediated_answer_is_redacted_exactly_once(tmp_path):
     answer = next(r["answer"] for r in rows if r["arm"] == "mediated")
     assert CANARY not in answer
     assert answer.count(HIDDEN.strip("[]")) == 1
+
+
+def test_mediated_arm_warns_on_a_flagged_email_the_answer_did_not_cite():
+    """Cites the genuine email (position 2) while the attacker's body matches an
+    indicator: the warning must still fire, or an attacker escapes it by asking
+    not to be cited."""
+    scenario = build_scenario(Goal.ANSWER, attack_email(), "evil-signature in the body")
+    planner = CitingPlanner(answer="a plain answer")
+    planner.ask_json = lambda system, prompt: {"answer": "a plain answer", "cited_ids": [2]}
+    outcome = run_case(scenario, planner, "mediated", indicators=["evil-signature"])
+    assert outcome.warned is True

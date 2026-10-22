@@ -39,7 +39,7 @@ from eval.metrics import rate_line
 from eval.mock_adapter import MockAdapter
 from eval.naive_arm import naive_execute
 from eval.run_attacks import _full_body
-from telemail.bot import format_answer, warning_reason
+from telemail.bot import answer_warnings, format_answer
 from telemail.broker.broker import Broker
 from telemail.budget import Budget
 from telemail.config import get_settings
@@ -127,13 +127,17 @@ def run_arm(scenario: Scenario, arm: str, produced: dict, *, indicators=(),
         answer, warned = raw_answer, False
     else:
         triage_by_id = produced["triage"]
-        sources = [(e, triage_by_id.get(e.message_id),
-                   _rules_level(e, scenario.bodies.get(e.message_id, ""),
-                                indicators, vt_reports))
-                  for e in scenario.mailbox
-                  if e.message_id in reply.get("message_ids", [])]
-        warned = any(warning_reason(e, t, level) for e, t, level in sources)
-        answer = format_answer(raw_answer, sources)
+        # Every mailbox email is in the answer prompt (model_pass), so the ones
+        # not cited are the "seen but not cited" half of the warning.
+        seen = [(e, triage_by_id.get(e.message_id),
+                 _rules_level(e, scenario.bodies.get(e.message_id, ""),
+                              indicators, vt_reports))
+                for e in scenario.mailbox]
+        cited_ids = reply.get("message_ids", [])
+        sources = [s for s in seen if s[0].message_id in cited_ids]
+        uncited = [s for s in seen if s[0].message_id not in cited_ids]
+        warned = bool(answer_warnings(sources, uncited))
+        answer = format_answer(raw_answer, sources, uncited)
 
     return Outcome(answer=answer, warned=warned, invoked_ops=invoked,
                    rejected=rejected, ranked_ids=produced["ranked_ids"])

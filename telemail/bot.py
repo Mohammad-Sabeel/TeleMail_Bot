@@ -292,12 +292,22 @@ def format_email_details(email: Email, triage: TriageResult | None,
     return "\n".join(lines)
 
 
-def format_answer(answer: str,
-                  sources: list[tuple[Email, TriageResult | None, str | None]]) -> str:
-    """Warnings first, computed by code from the cited emails; then the model's
-    answer; then the sources, numbered to match the [Open] buttons."""
+Source = tuple[Email, TriageResult | None, str | None]
+
+
+def answer_warnings(sources: list[Source], uncited: list[Source] = ()) -> list[tuple[Email, str]]:
+    """Over every email the model saw, not just the cited ones: citations are the
+    model's choice, so an injected email could otherwise ask not to be cited."""
+    return ([(e, why) for e, t, level in sources if (why := warning_reason(e, t, level))]
+            + [(e, f"{why}, not cited") for e, t, level in uncited
+               if (why := warning_reason(e, t, level))])
+
+
+def format_answer(answer: str, sources: list[Source], uncited: list[Source] = ()) -> str:
+    """Warnings first, computed by code from every email the model saw; then the
+    model's answer; then the cited sources, numbered to match the [Open] buttons."""
     lines = []
-    flagged = [(e, why) for e, t, level in sources if (why := warning_reason(e, t, level))]
+    flagged = answer_warnings(sources, uncited)
     if flagged:
         lines.append("⚠️ *Check before trusting this answer:*")
         lines += [f"• {escape_md(escape_trim(e.subject, 50))} — {escape_md(why)}"
@@ -484,16 +494,16 @@ class TeleMailBot:
     def _budget_exhausted(self) -> bool:
         return bool(getattr(getattr(self.planner, "budget", None), "exhausted", False))
 
-    def _answer(self, question: str) -> tuple[str, list[Email], bool]:
+    def _answer(self, question: str) -> tuple[str, list[Email], list[Email], bool]:
         """Blocking (1–2 model calls, up to 3 Gmail reads): run via to_thread.
-        Returns (answer, cited emails, whether the model answered)."""
+        Returns (answer, cited emails, every email the model saw, whether it answered)."""
         # ponytail: loads the whole mailbox per question; index it if it grows large.
         emails = self.db.recent_emails(days=36_500, now=self.now())
         candidates = retrieve(question, emails)
         history = list(self.memory)
         first = answer_from_snippets(self.planner, question, history, candidates)
         if first is None:
-            return NO_ANSWER, [], False
+            return NO_ANSWER, [], [], False
         answer, cited = first.answer, first.cited_ids
 
         if first.need_full_body and first.message_ids:
@@ -512,7 +522,7 @@ class TeleMailBot:
             second = answer_from_bodies(self.planner, question, history, reads)
             if second is not None:
                 answer, cited = second.answer, second.cited_ids
-        return answer, [candidates[n - 1] for n in cited], True
+        return answer, [candidates[n - 1] for n in cited], candidates, True
 
     async def _handle_question(self, update, question: str) -> None:
         if not self._planner_ready():
@@ -521,16 +531,19 @@ class TeleMailBot:
         if self._budget_exhausted():
             await update.message.reply_text(BUDGET_EXHAUSTED)
             return
-        answer, cited, answered = await asyncio.to_thread(self._answer, question)
-        sources = []
-        for e in cited:
+        answer, cited, seen, answered = await asyncio.to_thread(self._answer, question)
+
+        def source(e):
             a = self.db.get_assessment(e.message_id)
-            sources.append((e, self.db.get_triage(e.message_id), a["level"] if a else None))
+            return e, self.db.get_triage(e.message_id), a["level"] if a else None
+        sources = [source(e) for e in cited]
+        cited_ids = {e.message_id for e in cited}
+        uncited = [source(e) for e in seen if e.message_id not in cited_ids]
         if answered:
             self.memory.append((question, answer))
         buttons = open_buttons(SyncSummary(new=0, important=0, suspicious=[],
                                            top=[(e, t) for e, t, _ in sources]))
-        await update.message.reply_text(format_answer(answer, sources),
+        await update.message.reply_text(format_answer(answer, sources, uncited),
                                         parse_mode="MarkdownV2",
                                         reply_markup=_keyboard(buttons))
 
