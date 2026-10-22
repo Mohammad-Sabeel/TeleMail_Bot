@@ -200,6 +200,56 @@ def test_flagged_email_the_model_saw_but_did_not_cite_still_warns(make_bot):
     assert "Account suspended" in reply and "not cited" in reply
 
 
+class AssessingPlanner(Planner):
+    """Reads the visa letter in full; the assessment flags it as an injection."""
+
+    def __init__(self, flag=True):
+        super().__init__(need_body=True)
+        self.flag, self.assessed = flag, 0
+
+    def ask_json(self, system, user):
+        from telemail.triage.assess import ASSESS_SYSTEM
+        if system != ASSESS_SYSTEM:
+            return super().ask_json(system, user)
+        self.assessed += 1
+        return {"gist": "g", "social_engineering": False, "injection_attempt": self.flag,
+                "suggested_action": "ignore", "reason": "r"}
+
+
+def test_an_unassessed_email_read_in_full_is_assessed_and_stored(make_bot):
+    bot, _, _ = make_bot(AssessingPlanner())
+    u, msg = _update(text="when is my visa appointment?")
+    asyncio.run(bot.on_text(u, None))
+    assert bot.planner.assessed == 1
+    assert bot.db.get_assessment("visa")["level"] == "CAUTION"
+    assert "Visa appointment letter — assessed as caution" in msg.sent[0]
+
+
+def test_an_email_already_assessed_is_not_assessed_again(make_bot):
+    bot, _, _ = make_bot(AssessingPlanner())
+    bot.db.upsert_assessment("visa", "NONE", [])
+    asyncio.run(bot.on_text(_update(text="when is my visa appointment?")[0], None))
+    assert bot.planner.assessed == 0
+
+
+def test_bulk_mail_read_in_full_is_not_assessed_like_sync(make_bot):
+    """/sync skips bulk; so does the answer path. Assessing it flagged 5 of 11
+    real marketing emails (tracking redirects, promos) on the noise check."""
+    bot, _, _ = make_bot(AssessingPlanner())
+    bulk = tr("visa", "promotional").model_copy(update={"source": "prefilter"})
+    bot.db.upsert_triage(bulk)
+    asyncio.run(bot.on_text(_update(text="when is my visa appointment?")[0], None))
+    assert bot.planner.assessed == 0 and bot.db.get_assessment("visa") is None
+
+
+def test_snippet_only_answers_assess_nothing(make_bot):
+    planner = AssessingPlanner()
+    planner.need_body = False
+    bot, _, _ = make_bot(planner)
+    asyncio.run(bot.on_text(_update(text="did my visa letter come?")[0], None))
+    assert planner.assessed == 0
+
+
 def test_clean_uncited_email_does_not_warn():
     clean = mail("fee", "Fee receipt")
     assert "Check before trusting" not in format_answer("a", [], uncited=[

@@ -519,6 +519,13 @@ class TeleMailBot:
                     continue
                 if result.ok:
                     reads.append((n, email, result.data.get("body", "")))
+                    if (self.db.get_assessment(email.message_id) is None
+                            and not self._is_bulk(email.message_id)):
+                        # Only /sync assesses otherwise, so most mail has no
+                        # verdict for answer_warnings to use. ≤ MAX_BODY_READS calls.
+                        # Bulk is skipped as in /sync: on the real inbox its
+                        # tracking redirects and promos made 5 of 11 false alarms.
+                        self._assess_and_store(email, result.data)
             second = answer_from_bodies(self.planner, question, history, reads)
             if second is not None:
                 answer, cited = second.answer, second.cited_ids
@@ -731,6 +738,17 @@ class TeleMailBot:
         """OWASP LLM10: a flood of mail must not become an unbounded bill."""
         return list(message_ids)[:self.max_reads_per_sync]
 
+    def _assess_and_store(self, email: Email, read: dict | None, indicators=None):
+        """The /sync assessment for one email, stored where answer warnings read it."""
+        if indicators is None:
+            indicators = load_indicators(self.indicators_path)
+        vt = (self.threat_intel.reports(domains_from(read))
+              if self.threat_intel is not None and read else [])
+        verdict = assess_email(email, self.db.get_triage(email.message_id), read,
+                               self.planner, indicators, vt)
+        self.db.upsert_assessment(email.message_id, verdict.level.name, verdict.evidence)
+        return verdict
+
     def _read_and_assess(self, message_ids: list[str]
                          ) -> tuple[list[ReportEntry], list[tuple[str, str]]]:
         """Blocking (a Gmail read and a model call per email): run via to_thread.
@@ -752,11 +770,7 @@ class TeleMailBot:
             except Exception:
                 log.exception("could not read %s", mid)
                 read = None
-            vt = (self.threat_intel.reports(domains_from(read))
-                  if self.threat_intel is not None and read else [])
-            verdict = assess_email(email, triage, read, self.planner,
-                                   indicators, vt)
-            self.db.upsert_assessment(mid, verdict.level.name, verdict.evidence)
+            verdict = self._assess_and_store(email, read, indicators)
             entries.append(ReportEntry(
                 message_id=mid, sender=sender, subject=email.subject,
                 date=email.received_at, urgency=triage.urgency if triage else 0,
