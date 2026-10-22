@@ -53,8 +53,8 @@ from telemail.triage.assess import assess_model, combine_verdict, deterministic_
 from telemail.triage.converse import answer_from_bodies, retrieve
 from telemail.triage.planner import OpenRouterPlanner
 
-FIXTURES_LLMAIL = Path("data/fixtures_llmail")
-FIXTURES_OWN = Path("data/fixtures")
+FIXTURES_LLMAIL = Path("fixtures/llmail")
+FIXTURES_OWN = Path("fixtures/own")
 INDICATORS_PATH = Path("data/indicators.txt")
 
 
@@ -290,7 +290,7 @@ def summarise(rows: list[dict]) -> str:
 #
 # Three distinct sources: `--source llmail` replays the frozen, held-out
 # LLMail-Inject pool; `--source fixtures` replays the project's OWN
-# adversarial fixtures (data/fixtures/) as an in-distribution baseline;
+# adversarial fixtures (fixtures/own/) as an in-distribution baseline;
 # `--source adaptive` runs the feedback attacker from eval/adaptive.py
 # instead of any fixture pool. Either way the model is only ever the planner
 # the settings name — never a literal model id in this file.
@@ -305,7 +305,7 @@ def parse_args(argv=None):
     ap.add_argument("--ablation", choices=("full", "no-indicators", "no-vt", "neither"),
                     default="full")
     ap.add_argument("--rounds", type=int, default=5)
-    ap.add_argument("--out", default="data/goal_results.csv")
+    ap.add_argument("--out", default="results/goal_results.csv")
     ap.add_argument("--limit", type=int, default=0,
                     help="cap the number of cases processed; 0 means no limit")
     ap.add_argument("--cases", choices=("both", "attack", "control"), default="both",
@@ -313,7 +313,7 @@ def parse_args(argv=None):
                          "which always generates its own payloads")
     ap.add_argument("--fixtures", default=str(FIXTURES_OWN),
                     help="fixture directory for --source fixtures (Stage 2 uses "
-                         "data/fixtures_stage2 so data/fixtures stays frozen)")
+                         "fixtures/stage2 so fixtures/own stays frozen)")
     ap.add_argument("--goal", choices=[g.value for g in Goal], default=None,
                     help="run every case against this goal instead of round-robin")
     ap.add_argument("--with-cited-only", action="store_true",
@@ -327,7 +327,7 @@ def parse_args(argv=None):
 
 def _body_text(msg) -> str:
     """`eval/llmail.py:to_eml` always writes a single plain-text part, so no
-    MIME walk is needed here the way data/fixtures' hand-built multipart
+    MIME walk is needed here the way fixtures/own' hand-built multipart
     fixtures need `eval/run_attacks.py:_full_body`."""
     return str(msg.get_content()) if not msg.is_multipart() else ""
 
@@ -350,7 +350,7 @@ def _round_robin_by_arm(rows_with_arm) -> tuple[list, list]:
 
 def _llmail_cases(split: str) -> tuple[list, list]:
     """The held-out LLMail-Inject pool: real attacks written by real people,
-    frozen at data/fixtures_llmail/ (see docs/BUILD_PLAN.md's Stage 1 freeze).
+    frozen at fixtures/llmail/ (see docs/BUILD_PLAN.md's Stage 1 freeze).
     Filtered to one split; "unclear" fixtures are skipped — the dataset
     itself would not say which arm they belong to."""
     with (FIXTURES_LLMAIL / "manifest.csv").open() as fh:
@@ -366,7 +366,7 @@ def _llmail_cases(split: str) -> tuple[list, list]:
 
 
 def _own_fixture_cases(fixtures: Path = FIXTURES_OWN) -> tuple[list, list]:
-    """The project's OWN adversarial fixtures at data/fixtures/ — an
+    """The project's OWN adversarial fixtures at fixtures/own/ — an
     in-distribution baseline next to the held-out LLMail pool. These carry no
     split header (they predate the dev/test split), so every fixture is used
     regardless of --split. Parsing follows `eval/run_attacks.py:load_cases`

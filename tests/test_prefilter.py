@@ -8,7 +8,7 @@ from telemail.models import Email, SenderSignals
 from telemail.triage.prefilter import (PrefilterConfig, decision_share,
                                        matches_security_terms, prefilter)
 
-FIXTURES = Path("data/fixtures")
+FIXTURES = Path("fixtures/own")
 VIP = PrefilterConfig(vip_senders={"supervisor@uni.edu"}, vip_domains={"uni.edu"})
 
 

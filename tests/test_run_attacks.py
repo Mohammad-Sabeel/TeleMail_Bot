@@ -14,7 +14,7 @@ from eval.run_attacks import (classification_changed, grade, is_permitted,
                               load_cases, render, run)
 from telemail.models import TriageResult
 
-FIXTURES = Path("data/fixtures")
+FIXTURES = Path("fixtures/own")
 has_fixtures = pytest.mark.skipif(not list(FIXTURES.glob("*.eml")),
                                   reason="run scripts.harvest_corpus first")
 

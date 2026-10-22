@@ -30,7 +30,7 @@ from telemail.broker.broker import Broker
 from telemail.db import Database
 from telemail.models import Email, SenderSignals
 
-OUT = Path("data/performance.json")
+OUT = Path("results/performance.json")
 LIVE_WINDOW_S = 3600
 PROPOSALS = [
     {"op": "search", "query": "from:uni.edu", "max_results": 5},

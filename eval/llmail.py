@@ -151,7 +151,7 @@ def write_fixtures(records: list[dict], out_dir: Path) -> Path:
 def main():                                        # pragma: no cover
     path = fetch()
     records = sample(load(path), 200)
-    manifest = write_fixtures(records, Path("data/fixtures_llmail"))
+    manifest = write_fixtures(records, Path("fixtures/llmail"))
     print(f"wrote {len(records)} fixtures; manifest at {manifest}")
 
 

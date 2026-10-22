@@ -61,8 +61,8 @@ def test_load_cases_assigns_goals_round_robin():
 
 
 def test_load_cases_fixtures_source_is_the_projects_own_pool_not_llmail():
-    """--source fixtures must read data/fixtures/, the in-distribution
-    baseline, never the held-out data/fixtures_llmail/ pool."""
+    """--source fixtures must read fixtures/own/, the in-distribution
+    baseline, never the held-out fixtures/llmail/ pool."""
     attack, control = load_cases("fixtures", "dev")
     assert len(attack) == 33
     assert len(control) == 33
@@ -70,7 +70,7 @@ def test_load_cases_fixtures_source_is_the_projects_own_pool_not_llmail():
 
 
 def test_load_cases_fixtures_source_ignores_split():
-    """data/fixtures/ carries no split header; every fixture is available
+    """fixtures/own/ carries no split header; every fixture is available
     regardless of --split."""
     dev_attack, dev_control = load_cases("fixtures", "dev")
     test_attack, test_control = load_cases("fixtures", "test")

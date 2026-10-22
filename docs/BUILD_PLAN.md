@@ -386,7 +386,7 @@ So keep at least one operation-proposing path:
 
 #### The probe — a gate, not a feature
 
-Send 20 real subject lines from your inbox. Count how many replies parse **and** validate against `TriageResult`. Record the number in `LOG.md`; it goes in the report.
+Send 20 real subject lines from your inbox. Count how many replies parse **and** validate against `TriageResult`. Record the number in `notes/LOG.md`; it goes in the report.
 
 Below ~14/20, add one worked example and retry. Still low, change `MODEL_NAME`. Because the model lives behind one function, that costs nothing.
 
@@ -477,7 +477,7 @@ baseline interpretable. Regeneration is deterministic from the seed — record i
 - **T4** — `python -m eval.run_attacks --delimiters static` (fixed, escapable `<email>` tags) versus the default per-request nonce. Report both tables.
 - **T11** — `python -m eval.t11_headers`: the dict-collapse parser versus the topmost-`mx.google.com` parser. No model needed.
 
-Report them as *"T4 succeeded N/3 against static delimiters and N/3 against a per-request nonce"*, taking N from `results.md`, never from memory.
+Report them as *"T4 succeeded N/3 against static delimiters and N/3 against a per-request nonce"*, taking N from `results/README.md`, never from memory.
 
 **T10 is your original contribution.** You batch messages per call for cost reasons, so one poisoned message shares a context window with its neighbours. `python -m eval.cross_batch` tests whether it distorts *their* verdicts, not just its own:
 
@@ -611,7 +611,7 @@ evaluate:                                        # needs a model and >=20 labels
 	python -m eval.t11_headers                     # T11 (no model)
 	python -m eval.reliability                     # schema validity, rejections, duplicates
 	python -m eval.performance                     # RQ3: mediation overhead, latency, cost
-	python -m eval.render > results.md
+	python -m eval.render > results/README.md
 ```
 
 `make evaluate-offline` runs everything that needs neither a model nor labels. Pass prices to `performance` (`make evaluate PRICE_IN=… PRICE_OUT=…`); no model's price is assumed.
@@ -638,7 +638,7 @@ Report the confusion matrix, not just headline figures. With n≈38, a single fl
 #### Report structure
 
 - **Implementation** — the architecture as built, with the boundary test as evidence
-- **Results** — every table from `results.md`
+- **Results** — every table from `results/README.md`
 - **Discussion** — what the L1 column means; why L2 is the interesting cell; what T4 and T11 taught you
 - **Limitations** — single user, metadata to a third party, no attachments, small held-out set, prompt delimitation is defence in depth not the control, the broker stops actions not misleading text; answers could repeat secrets from mail (observed 2026-09-17: a reset password quoted into Telegram) — mitigated by keyword-anchored redaction at the output edge (`telemail/redact.py`, 7/230 real emails hidden, 1 over-hide), which still lets the model provider see the secret and misses secrets with no nearby keyword; a user-maintained indicator list (`data/indicators.txt`, `/flag`) adds signature evidence in the rules layer — it catches repeats, not new attacks, so it is a layer and never the control, and the evaluation reports it on and off; VirusTotal domain reputation (`telemail/threatintel.py`) adds a general reputational signal at the same layer, at the cost of sharing the link domains in your mail with a third party — domains only, cached for a week, common hosts skipped, and disabled when no key is set; thresholds calibrated on 12 real sender domains (legitimate senders score 0, substack.com 1, google.com 2), so a single vendor is treated as noise, 2–3 as caution and 4+ as a threat; free-tier limits enforced in code (15s between calls, 8 per sync, 400/day)
 - **Future work** — local inference, isolated write service, Pub/Sub push, multi-user
@@ -677,7 +677,7 @@ nothing is marked covered on the strength of a prompt instruction alone.
 | **LLM06 Excessive agency** | An assistant over a mailbox is the classic confused deputy | `gmail.readonly` only; discriminated-union intent allowlist; static dispatch; single-use confirmations; append-only audit log | `tests/test_broker.py`, `telemail/gmail/auth.py` FORBIDDEN_SCOPES, audit triggers | Covered; the arm to prove it is **Stage 1** |
 | **LLM07 System prompt leakage** | The planner prompt could be extracted by a crafted email | Prompts hold no secrets or credentials — only field names and allowed values | `telemail/triage/planner.py` | No test asserts this; add a leak goal to the attack suite → **Stage 1** |
 | **LLM08 Vector and embedding weaknesses** | Features B and D retrieve by TF-IDF similarity, so an attacker who stuffs likely keywords into an email can force it in front of the model | Re-rank pool is capped and the model can only re-order, never act | `telemail/triage/expect.py`, `telemail/triage/converse.py` | Retrieval poisoning is untested → new attack goal in **Stage 1**, integrity labels on retrieved text in **Stage 2** |
-| **LLM09 Misinformation** | A planted email can make an answer confidently wrong | Warnings computed by code from every email the model saw, so an email cannot escape by asking not to be cited; sources always listed | `telemail/bot.py` `answer_warnings`, `warning_reason`; T12 in `data/fixtures_stage2/` | A warning fires only if the email is flagged, and only /sync assesses email (48 of 1011 so far). T12 (dev): with rules and triage alone, 5/6 attacker wins whether or not uncited emails are checked; with the /sync assessment, 0/6, two of them caught only because uncited emails are checked. Controls carry the link 3/3, so G2 cannot separate injection from phishing persuasion. An unassessed, non-bulk email the model reads in full is now assessed at answer time (`TeleMailBot._assess_and_store`). Still unassessed: bulk mail and emails seen only as snippets; the link-mismatch rule no longer flags a verified sender's own domain over a tracking redirect, but still flags one naming another site (4 of the 8 real hits stay flagged) → **Stage 2** |
+| **LLM09 Misinformation** | A planted email can make an answer confidently wrong | Warnings computed by code from every email the model saw, so an email cannot escape by asking not to be cited; sources always listed | `telemail/bot.py` `answer_warnings`, `warning_reason`; T12 in `fixtures/stage2/` | A warning fires only if the email is flagged, and only /sync assesses email (48 of 1011 so far). T12 (dev): with rules and triage alone, 5/6 attacker wins whether or not uncited emails are checked; with the /sync assessment, 0/6, two of them caught only because uncited emails are checked. Controls carry the link 3/3, so G2 cannot separate injection from phishing persuasion. An unassessed, non-bulk email the model reads in full is now assessed at answer time (`TeleMailBot._assess_and_store`). Still unassessed: bulk mail and emails seen only as snippets; the link-mismatch rule no longer flags a verified sender's own domain over a tracking redirect, but still flags one naming another site (4 of the 8 real hits stay flagged) → **Stage 2** |
 | **LLM10 Unbounded consumption** | Each `/sync` reads and assesses every new email at the provider's per-token price; a flood of mail, or a loop, spends real money | `max_tokens` capped per call; reads limited to non-bulk mail; VirusTotal capped at 8/sync and 400/day | `telemail/triage/planner.py`, `telemail/threatintel.py` | No daily spend cap on the model, and no cap on emails read per sync → small task in **Stage 1** |
 
 **Stage 1 first run (2026-09-18, 66 cases, 223k tokens).** Held-out LLMail-Inject (30 attack,
@@ -700,7 +700,7 @@ happens to share a URL with the attacker is not scored as an attacker win
 (`tests/test_graders.py`). No case in the published run collided this way, so the table stands.
 
 **Stage 1 freeze (2026-09-18):** goals G1–G6, graders in `eval/graders.py`, and the
-LLMail-Inject sample in `data/fixtures_llmail/` are frozen. `--split dev` is used while
+LLMail-Inject sample in `fixtures/llmail/` are frozen. `--split dev` is used while
 building Stage 2; `--split test` is run once, at the end of Stage 2, and never tuned against.
 
 ## Related work — contrast, not competition
@@ -798,7 +798,7 @@ A complete evaluation of a smaller system beats a partial evaluation of a larger
 - [ ] Broker rejects 20 malformed proposals, all audited, no exceptions escape
 - [ ] Dispatch via static dict, never `getattr`
 - [ ] Boundary test passes
-- [ ] Model behind one function and one env var; probe number in `LOG.md`
+- [ ] Model behind one function and one env var; probe number in `notes/LOG.md`
 - [ ] Two-tier prompt with per-request nonce
 - [ ] At least one operation-proposing path exists
 - [ ] Approval buttons bound to a `message_id` fixed before the model ran

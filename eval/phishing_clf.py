@@ -35,7 +35,7 @@ from sklearn.pipeline import Pipeline
 csv.field_size_limit(sys.maxsize)
 
 CORPUS = Path("data/corpus/archive")
-FIXTURES = Path("data/fixtures")
+FIXTURES = Path("fixtures/own")
 MODEL_OUT = Path("data/phishing_clf.joblib")
 
 # Held out: Nazario and Nigerian_Fraud supply the fixtures' carrier text.
@@ -140,11 +140,11 @@ def evaluate(clf):
     print(f"\npairs where the payload flipped the verdict to phishing: "
           f"{flipped}/{len(rows)}")
 
-    with open("data/paired_detection.csv", "w", newline="") as fh:
+    with open("results/paired_detection.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
-    print("wrote data/paired_detection.csv")
+    print("wrote results/paired_detection.csv")
 
     print("\nReading it: a delta near zero means the detector responds to the "
           "carrier text, not the injected instruction — injection is invisible "

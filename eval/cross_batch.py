@@ -35,7 +35,7 @@ from telemail.gmail.normalise import SNIPPET_CHARS
 from telemail.models import Email, TriageResult
 from telemail.triage.planner import BATCH_SIZE
 
-OUT = Path("data/cross_batch.csv")
+OUT = Path("results/cross_batch.csv")
 
 
 def t10_payload() -> str:
@@ -136,7 +136,7 @@ def render(rows: list[dict]) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fixtures", default="data/fixtures")
+    ap.add_argument("--fixtures", default="fixtures/own")
     ap.add_argument("--planner", choices=["openrouter", "ollama"],
                     default="openrouter")
     ap.add_argument("--model", default=None)

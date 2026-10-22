@@ -8,7 +8,7 @@ from telemail.db import Database
 from telemail.gmail.normalise import (_display_name_mismatch, from_eml_bytes,
                                       from_eml_path, from_gmail_payload)
 
-FIXTURES = Path("data/fixtures")
+FIXTURES = Path("fixtures/own")
 has_fixtures = pytest.mark.skipif(not list(FIXTURES.glob("*.eml")),
                                   reason="run scripts.harvest_corpus first")
 

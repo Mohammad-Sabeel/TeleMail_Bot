@@ -1,10 +1,10 @@
-"""Assemble results.md from the JSON each harness leaves behind.
+"""Assemble results/README.md from the JSON each harness leaves behind.
 
 Never transcribe a number by hand. You will change something in week 8 and
 forget to update a figure, and the one inconsistency an examiner finds costs
 more credibility than the whole table earns.
 
-    python -m eval.render > results.md
+    python -m eval.render > results/README.md
 """
 from __future__ import annotations
 
@@ -12,11 +12,12 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-DATA = Path("data")
+DATA = Path("results")         # published result tables
+PRIVATE = Path("data")         # computed from the owner's inbox; never published
 
 
-def load(name: str):
-    p = DATA / name
+def load(name: str, base: Path = DATA):
+    p = base / name
     return json.loads(p.read_text()) if p.exists() else None
 
 
@@ -25,7 +26,7 @@ def section(title: str, body: str | None, missing: str) -> str:
 
 
 def triage_section() -> str | None:
-    r = load("triage_metrics.json")
+    r = load("triage_metrics.json", PRIVATE)
     if not r:
         return None
     lines = [f"Held-out n={r['n_test']}, urgency threshold {r['threshold']} "
@@ -47,13 +48,14 @@ def triage_section() -> str | None:
               f"| actually not | {h['fp']} | {h['tn']} |", ""]
 
     fns = r.get("false_negatives", [])
-    # Sender domain only: this file is published, the inbox is not. Subjects
-    # for the write-up are in data/triage_metrics.json, which stays local.
-    lines.append(f"**False negatives ({len(fns)})** — each requires an "
-                 f"explanation in the report (subjects: data/triage_metrics.json).\n")
+    # Counts only: this file is published, the inbox is not. Senders and
+    # subjects for the write-up are in data/triage_metrics.json, which stays local.
+    by_source = {}
     for f in fns:
-        lines.append(f"- `{f['source']}` u={f['urgency']} — "
-                     f"{f['sender'].rpartition('@')[2]}")
+        by_source[f["source"]] = by_source.get(f["source"], 0) + 1
+    lines.append(f"**False negatives ({len(fns)})** — each requires an "
+                 f"explanation in the report (details: data/triage_metrics.json).\n")
+    lines += [f"- missed by `{src}`: {n}" for src, n in sorted(by_source.items())]
     return "\n".join(lines) + "\n"
 
 
@@ -207,15 +209,15 @@ def performance_section() -> str | None:
     return "\n".join(lines) + "\n"
 
 
-GOAL_RESULTS = Path("data/goal_results.csv")
+GOAL_RESULTS = Path("results/goal_results.csv")
 
 # G4 and G5 come from one deterministic retrieval and one pair of triage verdicts
 # computed outside the arm loop, so both arms are written the same value. Two rows
 # with two confidence intervals would double the apparent evidence.
 SINGLE_ROW_GOALS = ("G4", "G5")
 
-# This text ships WITH the table rather than being typed into results.md, because
-# results.md is regenerated and any note added by hand is erased on the next run.
+# This text ships WITH the table rather than being typed into results/README.md, because
+# results/README.md is regenerated and any note added by hand is erased on the next run.
 GOALS_CAVEATS = """
 **How to read this table.**
 

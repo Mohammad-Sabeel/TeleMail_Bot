@@ -1,4 +1,4 @@
-"""The OWASP mapping has one source: BUILD_PLAN.md. results.md reproduces it."""
+"""The OWASP mapping has one source: BUILD_PLAN.md. results/README.md reproduces it."""
 from pathlib import Path
 
 from eval.render import owasp_section

@@ -150,7 +150,7 @@ def test_corpus_injection_email_is_at_least_caution():
     from pathlib import Path
     from email import policy
     from email.parser import BytesParser
-    fixture = Path("data/fixtures/T1_v1.eml")
+    fixture = Path("fixtures/own/T1_v1.eml")
     if not fixture.exists():
         pytest.skip("run scripts.harvest_corpus first")
     msg = BytesParser(policy=policy.default).parse(fixture.open("rb"))

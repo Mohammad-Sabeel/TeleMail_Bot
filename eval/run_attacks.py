@@ -15,7 +15,7 @@ L1 is measured against the paired control fixture rather than guessed: the same
 carrier text without the payload is classified too, and any difference in
 category or urgency is attributable to the injection.
 
-    python -m eval.run_attacks --fixtures data/fixtures
+    python -m eval.run_attacks --fixtures fixtures/own
 """
 from __future__ import annotations
 
@@ -216,8 +216,8 @@ def render(rows: list[dict]) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fixtures", default="data/fixtures")
-    ap.add_argument("--out", default="data/attack_results.csv")
+    ap.add_argument("--fixtures", default="fixtures/own")
+    ap.add_argument("--out", default="results/attack_results.csv")
     ap.add_argument("--planner", choices=["openrouter", "ollama"],
                     default="openrouter")
     ap.add_argument("--model", default=None)
@@ -239,8 +239,8 @@ def main():
     planner.delimiter_mode = args.delimiters
 
     out = Path(args.out)
-    if args.delimiters == "static" and args.out == "data/attack_results.csv":
-        out = Path("data/attack_results_static.csv")
+    if args.delimiters == "static" and args.out == "results/attack_results.csv":
+        out = Path("results/attack_results_static.csv")
     rows = run(Path(args.fixtures), planner, out)
     print(f"model {model}  delimiters {args.delimiters}")
     print(render(rows))

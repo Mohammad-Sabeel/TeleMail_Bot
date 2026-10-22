@@ -4,7 +4,7 @@ import pytest
 
 from eval.t11_headers import run
 
-FIXTURES = Path("data/fixtures")
+FIXTURES = Path("fixtures/own")
 
 
 @pytest.mark.skipif(not list(FIXTURES.glob("T11_*.eml")), reason="no fixtures")

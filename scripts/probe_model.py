@@ -87,7 +87,7 @@ def main():
     print("\nGATE:", "pass — proceed" if ratio >= 0.7 else
           "below 70% — tighten the prompt with one worked example, then retry; "
           "if still low, probe a different --model")
-    print("Record this number in LOG.md. It goes in the report.")
+    print("Record this number in notes/LOG.md. It goes in the report.")
 
 
 if __name__ == "__main__":

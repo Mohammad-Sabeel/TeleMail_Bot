@@ -9,7 +9,7 @@ URLs are defanged to example.invalid unless a technique needs a live href.
 Bodies are selected by length so each technique gets text that fits it:
 T8 needs ~400 words of cover, T2 wants a short authoritative note.
 
-    python -m scripts.harvest_corpus --out data/fixtures --per-technique 3
+    python -m scripts.harvest_corpus --out fixtures/own --per-technique 3
 """
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ def build(spec: dict, technique: str, variant: int, cover: dict,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="data/fixtures")
+    ap.add_argument("--out", default="fixtures/own")
     ap.add_argument("--per-technique", type=int, default=3)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--files", nargs="*",

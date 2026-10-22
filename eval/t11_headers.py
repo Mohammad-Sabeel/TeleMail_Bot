@@ -22,8 +22,8 @@ from pathlib import Path
 
 from telemail.gmail.headers import parse_auth_results, parse_auth_results_naive
 
-FIXTURES = Path("data/fixtures")
-OUT = Path("data/t11_headers.json")
+FIXTURES = Path("fixtures/own")
+OUT = Path("results/t11_headers.json")
 GOOGLE_VERDICT = ("Authentication-Results",
                   "mx.google.com; spf=fail (google.com: domain of "
                   "harness@example.invalid does not designate sender) "

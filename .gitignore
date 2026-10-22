@@ -1,39 +1,27 @@
-# environment and secrets
-.venv/
+# Private: never published. Everything personal lives in these two folders.
+#   data/   credentials, OAuth token, mailbox database, trained models, corpus,
+#           caches, reports and any metric computed from the owner's inbox
+#   notes/  working log, daily checklist, synopsis
+data/
+notes/
 .env
+
+# Personal tooling (kept locally)
+CLAUDE.md
+.claude/
+.superpowers/
+docs/superpowers/
+graphify-out/
+
+# Separate repository (GitHub Pages for the OAuth consent screen)
+site/
+
+# Environment and caches
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
 .DS_Store
-
-# separate repository (GitHub Pages for the OAuth consent screen)
-site/
-
-# personal files
 Screenshot*.png
 ~$*.docx
-
-# data/: credentials, token, database, models and the 250MB corpus stay out.
-# Only the reproducible corpus and the result tables are tracked.
-data/*
-!data/fixtures/
-!data/fixtures_llmail/
-!data/fixtures_stage2/
-!data/stage2_dev.csv
-!data/paired_detection.csv
-!data/injection_transfer.csv
-!data/attack_results.csv
-!data/attack_results_static.csv
-!data/cross_batch.csv
-!data/goal_results.csv
-!data/reliability.json
-!data/t11_headers.json
-!data/performance.json
-
-# generated knowledge graph (regenerate: graphify update .)
-graphify-out/
-
-# Personal tooling and working notes: kept locally, not published.
-.claude/
-CLAUDE.md
-docs/superpowers/

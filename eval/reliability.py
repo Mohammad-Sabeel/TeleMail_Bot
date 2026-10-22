@@ -96,8 +96,8 @@ def main():
     db = Database(args.db or get_settings().db_path)
     r = collect(db)
     print(render(r))
-    Path("data/reliability.json").write_text(json.dumps(r, indent=1))
-    print("\nwrote data/reliability.json")
+    Path("results/reliability.json").write_text(json.dumps(r, indent=1))
+    print("\nwrote results/reliability.json")
 
 
 if __name__ == "__main__":

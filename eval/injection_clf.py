@@ -49,7 +49,7 @@ def _chunks(text: str) -> list[str]:
             if words[i:i + _CHUNK_WORDS]]
 
 DATA = Path("data/corpus/Prompt_INJECTION_And_Benign_DATASET.jsonl")
-FIXTURES = Path("data/fixtures")
+FIXTURES = Path("fixtures/own")
 MODEL_OUT = Path("data/injection_clf.joblib")
 SEED = 42
 
@@ -144,11 +144,11 @@ def evaluate(clf):
     print("-" * 72)
     print(f"{'DETECTED':>10} | {f'{wd}/{n}':>21} | {f'{cd}/{n}':>21}")
 
-    with open("data/injection_transfer.csv", "w", newline="") as fh:
+    with open("results/injection_transfer.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
-    print("\nwrote data/injection_transfer.csv")
+    print("\nwrote results/injection_transfer.csv")
 
 
 if __name__ == "__main__":

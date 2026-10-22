@@ -333,9 +333,9 @@ def test_run_all_adds_the_cited_only_arm_only_when_asked(tmp_path):
 
 def test_goal_and_fixtures_flags_parse():
     from eval.run_goals import parse_args
-    a = parse_args(["--source", "fixtures", "--fixtures", "data/fixtures_stage2",
+    a = parse_args(["--source", "fixtures", "--fixtures", "fixtures/stage2",
                     "--goal", "G2", "--with-cited-only"])
-    assert (a.fixtures, a.goal, a.with_cited_only) == ("data/fixtures_stage2", "G2", True)
+    assert (a.fixtures, a.goal, a.with_cited_only) == ("fixtures/stage2", "G2", True)
 
 
 class AssessingPlanner(CitingPlanner):

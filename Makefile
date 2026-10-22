@@ -31,8 +31,8 @@ evaluate-offline:
 	$(PY) -m eval.t11_headers
 	$(PY) -m eval.reliability
 	$(PY) -m eval.performance
-	$(PY) -m eval.render > results.md
-	@echo "wrote results.md (offline results only)"
+	$(PY) -m eval.render > results/README.md
+	@echo "wrote results/README.md (offline results only)"
 
 # Every number in the report, from one command. Needs a model and >=20 labels.
 # Run it twice and diff: anything that moves is non-determinism to explain.
@@ -41,7 +41,7 @@ evaluate:
 	$(PY) -m eval.run_attacks --delimiters static
 	$(PY) -m eval.run_attacks
 	# Stage 1: the four invocations behind the published table. They APPEND to
-	# data/goal_results.csv (see run_goals._write_merged), they do not replace it.
+	# results/goal_results.csv (see run_goals._write_merged), they do not replace it.
 	$(PY) -m eval.run_goals --source llmail --split dev --limit 30
 	$(PY) -m eval.run_goals --source llmail --split dev --cases control
 	$(PY) -m eval.run_goals --source fixtures --split dev
@@ -52,8 +52,8 @@ evaluate:
 	$(PY) -m eval.t11_headers
 	$(PY) -m eval.reliability
 	$(PY) -m eval.performance $(if $(PRICE_IN),--price-in $(PRICE_IN) --price-out $(PRICE_OUT),)
-	$(PY) -m eval.render > results.md
-	@echo "wrote results.md"
+	$(PY) -m eval.render > results/README.md
+	@echo "wrote results/README.md"
 
 clean:
 	rm -rf .pytest_cache
